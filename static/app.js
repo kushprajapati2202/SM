@@ -44,7 +44,11 @@ function setupTabNavigation() {
 function openTradingViewModal(symbol) {
     const modal = document.getElementById("chart-modal");
     const modalTitle = document.getElementById("modal-title");
+    const externalLink = document.getElementById("modal-external-link");
+    
     modalTitle.innerText = `${symbol} Interactive Chart`;
+    externalLink.href = `https://www.tradingview.com/symbols/NSE-${symbol}/`;
+    
     modal.classList.add("active");
 
     new TradingView.widget({

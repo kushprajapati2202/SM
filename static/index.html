@@ -199,7 +199,12 @@
         <div class="modal-content">
             <div class="modal-header">
                 <h3 id="modal-title">Interactive Chart</h3>
-                <span class="close-btn" id="modal-close">&times;</span>
+                <div class="modal-header-actions" style="display: flex; align-items: center; gap: 16px;">
+                    <a id="modal-external-link" href="#" target="_blank" style="color: var(--accent-blue); text-decoration: none; font-size: 13px; font-weight: 500; display: flex; align-items: center; gap: 6px;">
+                        <i class="fa-solid fa-arrow-up-right-from-square"></i> Open in TradingView
+                    </a>
+                    <span class="close-btn" id="modal-close">&times;</span>
+                </div>
             </div>
             <div class="modal-body">
                 <div id="tradingview_widget" class="tv-widget"></div>
