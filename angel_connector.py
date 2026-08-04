@@ -17,6 +17,9 @@ class AngelConnector:
         self.feed_token = None
         self.headers = {}
         
+        # Read-only configuration. Disallow any order placement or portfolio tracking endpoints.
+        self._disallowed_endpoints = ["/order/", "/portfolio/", "/trade/", "/position"]
+        
         self.symbol_mapping_file = "angel_symbols.json"
         self.symbol_map = {}
         self._load_symbol_map()
@@ -52,6 +55,11 @@ class AngelConnector:
     def is_configured(self) -> bool:
         return bool(self.client_id and self.password and self.api_key and self.totp_key)
 
+    def _verify_url_safety(self, url: str):
+        for path in self._disallowed_endpoints:
+            if path in url:
+                raise PermissionError(f"Action Blocked: Call to trading/portfolio endpoint '{url}' is restricted by API security policy.")
+
     async def login(self) -> bool:
         if not self.is_configured():
             print("Angel One credentials incomplete in .env.")
@@ -67,6 +75,7 @@ class AngelConnector:
             return False
 
         url = "https://apiconnect.angelone.in/rest/auth/angelbroking/user/v1/loginByPassword"
+        self._verify_url_safety(url)
         
         headers = {
             "Content-Type": "application/json",
@@ -133,6 +142,7 @@ class AngelConnector:
                 return None
 
         url = "https://apiconnect.angelone.in/rest/secure/angelbroking/historical/v1/getCandleData"
+        self._verify_url_safety(url)
 
         end_date = datetime.datetime.now()
         start_date = end_date - datetime.timedelta(days=days_back)
