@@ -2,6 +2,7 @@ import os
 import json
 import uuid
 import datetime
+import asyncio
 from dotenv import load_dotenv
 load_dotenv()  # Load .env file variables
 
@@ -17,6 +18,7 @@ from typing import List, Dict, Any, Optional
 from quant_engine import QuantitativeEngine
 from pattern_detector import PatternDetector
 from ai_sentinel import AISentinel
+from angel_connector import AngelConnector
 
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.concurrency import run_in_threadpool
@@ -40,6 +42,7 @@ app.add_middleware(
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 sentinel = AISentinel()
+angel = AngelConnector()
 
 # Predefined list of high-liquidity NSE stocks (Full Nifty 50 constituents)
 WATCHLIST = [
@@ -405,15 +408,54 @@ async def scan_market(force_refresh: bool = False):
         data = await run_in_threadpool(get_cached_market_data)
 
     if data is None:
-        try:
-            # Download historical data (1 year of daily candles to support 200 EMA calculation)
-            data = await run_in_threadpool(yf.download, tickers_str, period="1y", interval="1d", group_by="ticker", progress=False)
-            await run_in_threadpool(save_market_data_to_cache, data)
-        except Exception as e:
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to fetch market data from Yahoo Finance: {str(e)}"
-            )
+        if angel.is_configured():
+            try:
+                print("Fetching data from Angel One SmartAPI...")
+                # Download historical data from Angel One in parallel
+                async def fetch_ticker_data(symbol: str):
+                    df_ticker = await angel.get_historical_candles(symbol, interval="ONE_DAY", days_back=365)
+                    return symbol, df_ticker
+                
+                tasks = [fetch_ticker_data(s) for s in WATCHLIST]
+                results = await asyncio.gather(*tasks)
+                
+                dfs = []
+                keys = []
+                for sym, df_ticker in results:
+                    if df_ticker is not None and not df_ticker.empty:
+                        df_ticker = df_ticker.rename(columns={
+                            'open': 'Open',
+                            'high': 'High',
+                            'low': 'Low',
+                            'close': 'Close',
+                            'volume': 'Volume'
+                        })
+                        df_ticker['Date'] = pd.to_datetime(df_ticker['timestamp'])
+                        df_ticker = df_ticker.set_index('Date')
+                        df_ticker = df_ticker[['Open', 'High', 'Low', 'Close', 'Volume']]
+                        dfs.append(df_ticker)
+                        keys.append(f"{sym}.NS")
+                
+                if dfs:
+                    data = pd.concat(dfs, axis=1, keys=keys)
+                    await run_in_threadpool(save_market_data_to_cache, data)
+                else:
+                    raise Exception("No data returned from Angel One for watchlist.")
+            except Exception as e:
+                print(f"Angel One data fetch failed: {e}. Falling back to Yahoo Finance...")
+                data = None
+
+        if data is None:
+            try:
+                # Download historical data (1 year of daily candles to support 200 EMA calculation)
+                print("Fetching data from Yahoo Finance...")
+                data = await run_in_threadpool(yf.download, tickers_str, period="1y", interval="1d", group_by="ticker", progress=False)
+                await run_in_threadpool(save_market_data_to_cache, data)
+            except Exception as e:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to fetch market data: {str(e)}"
+                )
 
     # Calculate indicators in threadpool to prevent event loop blocking
     bullish_candidates, bearish_candidates = await run_in_threadpool(calculate_technical_candidates, data)
@@ -626,3 +668,18 @@ async def run_backtest(req: BacktestRequest):
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api-status")
+async def get_api_status():
+    if not angel.is_configured():
+        return {"status": "DISCONNECTED", "feed": "YAHOO_FINANCE", "details": "Credentials not configured in .env."}
+    
+    is_logged_in = bool(angel.headers)
+    if not is_logged_in:
+        # Try authenticating
+        is_logged_in = await angel.login()
+        
+    if is_logged_in:
+        return {"status": "CONNECTED", "feed": "ANGEL_ONE", "details": f"Active Client ID: {angel.client_id}"}
+    else:
+        return {"status": "ERROR", "feed": "YAHOO_FINANCE", "details": "Authentication failed. Falling back to Yahoo Finance."}

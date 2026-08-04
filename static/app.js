@@ -363,8 +363,9 @@ document.getElementById("scan-btn").addEventListener("click", async () => {
         document.getElementById("strategy-filter").value = "";
         document.getElementById("sort-select").value = "accuracy-desc";
 
-        // Refresh past suggestion tracker
+        // Refresh past suggestion tracker and API Status
         await loadHistory();
+        await checkApiStatus();
         
     } catch (err) {
         alert("Scanner failed. Please verify uvicorn backend is running!");
@@ -385,6 +386,7 @@ document.getElementById("scan-btn").addEventListener("click", async () => {
         document.getElementById("stat-bearish").innerText = "ERROR";
         document.getElementById("stat-sentinel").innerText = "OFFLINE";
     } finally {
+        checkApiStatus();
         loader.style.display = "none";
         board.style.opacity = "1";
         btn.disabled = false;
@@ -481,8 +483,45 @@ document.getElementById("backtest-form").addEventListener("submit", async (e) =>
     }
 });
 
+// Real-Time Clock
+function startRealTimeClock() {
+    const clockEl = document.getElementById("current-time-clock");
+    setInterval(() => {
+        const now = new Date();
+        clockEl.innerText = now.toLocaleTimeString();
+    }, 1000);
+}
+
+// API Status Checking
+async function checkApiStatus() {
+    const statusEl = document.getElementById("stat-feed-status");
+    try {
+        const response = await fetch(`${API_BASE}/api-status`);
+        if (!response.ok) throw new Error("API call failed");
+        const data = await response.json();
+        
+        statusEl.innerText = data.status;
+        if (data.status === "CONNECTED") {
+            statusEl.style.color = "var(--accent-green)";
+            statusEl.title = data.details;
+        } else if (data.status === "DISCONNECTED") {
+            statusEl.style.color = "var(--text-secondary)";
+            statusEl.title = data.details;
+        } else {
+            statusEl.style.color = "var(--accent-orange)";
+            statusEl.title = data.details;
+        }
+    } catch (err) {
+        statusEl.innerText = "OFFLINE";
+        statusEl.style.color = "var(--accent-red)";
+        statusEl.title = "Could not communicate with local backend server.";
+    }
+}
+
 // Load history and setup navigation automatically on page bootup
 window.addEventListener("load", () => {
     loadHistory();
     setupTabNavigation();
+    startRealTimeClock();
+    checkApiStatus();
 });
