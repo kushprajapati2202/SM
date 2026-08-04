@@ -40,13 +40,18 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 sentinel = AISentinel()
 
-# Predefined list of high-liquidity NSE stocks (Nifty 50 constituents in F&O segment)
+# Predefined list of high-liquidity NSE stocks (Full Nifty 50 constituents)
 WATCHLIST = [
-    "RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK", "SBIN", "TATASTEEL", 
-    "ITC", "BHARTIARTL", "LT", "M&M", "HINDUNILVR", "KOTAKBANK", "AXISBANK", 
-    "MARUTI", "SUNPHARMA", "ADANIENT", "WIPRO", "POWERGRID", "NTPC", 
-    "ONGC", "COALINDIA", "HCLTECH", "BAJFINANCE", "ASIANPAINT", "JSWSTEEL",
-    "TATAELXSI", "JIOFIN", "TITAN", "ULTRACEMCO"
+    "ADANIENT", "ADANIPORTS", "APOLLOHOSP", "ASIANPAINT", "AXISBANK",
+    "BAJAJ-AUTO", "BAJFINANCE", "BAJAJFINSV", "BEL", "BHARTIARTL",
+    "BPCL", "CIPLA", "COALINDIA", "DRREDDY", "EICHERMOT",
+    "GRASIM", "HCLTECH", "HDFCBANK", "HDFCLIFE", "HEROMOTOCO",
+    "HINDALCO", "HINDUNILVR", "ICICIBANK", "INDUSINDBK", "INFY",
+    "ITC", "JSWSTEEL", "KOTAKBANK", "LT", "M&M",
+    "MARUTI", "NESTLEIND", "NTPC", "ONGC", "POWERGRID",
+    "RELIANCE", "SBILIFE", "SBIN", "SUNPHARMA", "TATACONSUM",
+    "TATAMOTORS", "TATASTEEL", "TCS", "TECHM", "TITAN",
+    "ULTRACEMCO", "WIPRO", "SHRIRAMFIN", "TRENT", "JIOFIN"
 ]
 
 def save_scan_to_history(result: dict):
