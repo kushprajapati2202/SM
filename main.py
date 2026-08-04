@@ -381,9 +381,9 @@ async def scan_market():
                     "status": "APPROVED" if validated else "BLOCKED_BY_RISK"
                 })
 
-    # Sort candidates
-    bullish_candidates = sorted(bullish_candidates, key=lambda x: x['rsi'])
-    bearish_candidates = sorted(bearish_candidates, key=lambda x: x['rsi'], reverse=True) # Highest RSI first for shorts
+    # Sort candidates by accuracy score descending
+    bullish_candidates = sorted(bullish_candidates, key=lambda x: x['accuracy_score'], reverse=True)
+    bearish_candidates = sorted(bearish_candidates, key=lambda x: x['accuracy_score'], reverse=True)
 
     result = {
         "total_scanned": len(WATCHLIST),

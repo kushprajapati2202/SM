@@ -293,7 +293,7 @@ document.getElementById("scan-btn").addEventListener("click", async () => {
         // Clear filter inputs on new scan
         document.getElementById("search-input").value = "";
         document.getElementById("strategy-filter").value = "";
-        document.getElementById("sort-select").value = "";
+        document.getElementById("sort-select").value = "accuracy-desc";
 
         // Refresh past suggestion tracker
         await loadHistory();
