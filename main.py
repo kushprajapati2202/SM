@@ -683,8 +683,22 @@ async def run_backtest(req: BacktestRequest):
 
 @app.get("/api-status")
 async def get_api_status():
-    if not angel.is_configured():
-        return {"status": "DISCONNECTED", "feed": "YAHOO_FINANCE", "details": "Credentials not configured in .env."}
+    missing = []
+    if not angel.client_id:
+        missing.append("ANGEL_ONE_CLIENT_ID")
+    if not angel.password:
+        missing.append("ANGEL_ONE_PASSWORD")
+    if not angel.api_key:
+        missing.append("ANGEL_ONE_API_KEY")
+    if not angel.totp_key:
+        missing.append("ANGEL_ONE_TOTP_KEY")
+
+    if missing:
+        return {
+            "status": "DISCONNECTED",
+            "feed": "YAHOO_FINANCE",
+            "details": f"Missing: {', '.join(missing)}"
+        }
     
     is_logged_in = bool(angel.headers)
     if not is_logged_in:
