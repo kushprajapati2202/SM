@@ -117,8 +117,8 @@ async def scan_market():
     tickers_str = " ".join(tickers)
 
     try:
-        # Download historical data (6 months of daily candles)
-        data = yf.download(tickers_str, period="6mo", interval="1d", group_by="ticker", progress=False)
+        # Download historical data (1 year of daily candles to support 200 EMA calculation)
+        data = yf.download(tickers_str, period="1y", interval="1d", group_by="ticker", progress=False)
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -214,6 +214,24 @@ async def scan_market():
         elif is_bull_flag:
             strategy_triggered = "Strategy 5: Bull Flag Breakout"
 
+        # Strategy 6: Oversold RSI Rebound
+        elif rsi < 38:
+            strategy_triggered = "Strategy 6: Oversold RSI Rebound"
+
+        # Strategy 7: Bollinger Band Lower Support
+        elif close_price <= bb_lower * 1.015 and rsi < 45:
+            strategy_triggered = "Strategy 7: Bollinger Band Lower Support"
+
+        # Strategy 8: MACD Bullish Crossover
+        elif macd_hist > 0 and prev_macd_hist <= 0 and rsi < 55:
+            strategy_triggered = "Strategy 8: MACD Bullish Crossover"
+
+        # Strategy 9: EMA Support Bounce
+        elif (close_price > ema_200 and 
+              abs(latest['low'] - ema_50) / ema_50 <= 0.015 and 
+              (is_bullish_engulfing or is_hammer)):
+            strategy_triggered = "Strategy 9: EMA Support Bounce"
+
         # If a strategy triggered, score it using the AI Confidence matrix
         if strategy_triggered:
             score = 0
@@ -231,20 +249,20 @@ async def scan_market():
                 score += 10
                 
             # 3. Momentum (RSI + MACD) - 20%
-            if rsi > 45 and macd_hist > prev_macd_hist:
+            if (rsi > 45 or rsi < 38) and macd_hist > prev_macd_hist:
                 score += 20
-            elif rsi > 45 or macd_hist > prev_macd_hist:
+            elif (rsi > 45 or rsi < 38) or macd_hist > prev_macd_hist:
                 score += 10
                 
-            # 4. Pattern Quality - 20%
-            score += 20  # Triggered an elite pattern
+            # 4. Pattern Quality - 40%
+            score += 40  # Triggered an elite pattern
             
             # 5. Volatility (ATR/ADX) - 10%
             if adx > 25:
                 score += 10
                 
-            # Only trigger suggestions if AI confidence is >= 80
-            if score >= 80:
+            # Only trigger suggestions if AI confidence is >= 60
+            if score >= 60:
                 target_price = round(close_price * 1.050, 2)  # +5% target
                 stop_loss = round(close_price * 0.965, 2)     # -3.5% stop loss
                 
@@ -286,6 +304,12 @@ async def scan_market():
             bearish_strategy = "Volume Breakdown"
         elif is_double_top and volume > volume_avg_20 and macd_hist < prev_macd_hist:
             bearish_strategy = "Double Top Rebound"
+        elif rsi > 62:
+            bearish_strategy = "Strategy 4: Overbought RSI Pullback"
+        elif close_price >= bb_upper * 0.985 and rsi > 55:
+            bearish_strategy = "Strategy 5: Bollinger Band Upper Rejection"
+        elif macd_hist < 0 and prev_macd_hist >= 0:
+            bearish_strategy = "Strategy 6: MACD Bearish Crossover"
 
         if bearish_strategy:
             score = 0
@@ -303,19 +327,19 @@ async def scan_market():
                 score += 10
                 
             # 3. Momentum (RSI + MACD) - 20%
-            if rsi < 55 and macd_hist < prev_macd_hist:
+            if (rsi < 55 or rsi > 62) and macd_hist < prev_macd_hist:
                 score += 20
-            elif rsi < 55 or macd_hist < prev_macd_hist:
+            elif (rsi < 55 or rsi > 62) or macd_hist < prev_macd_hist:
                 score += 10
                 
-            # 4. Pattern Quality - 20%
-            score += 20
+            # 4. Pattern Quality - 40%
+            score += 40
             
             # 5. Volatility (ATR/ADX) - 10%
             if adx > 25:
                 score += 10
                 
-            if score >= 80:
+            if score >= 60:
                 target_price = round(close_price * 0.950, 2)  # -5% target
                 stop_loss = round(close_price * 1.035, 2)     # +3.5% stop loss
                 
