@@ -23,6 +23,8 @@ class TestTradingApp(unittest.TestCase):
         self.assertIn("sma_20", df_indicators.columns)
         self.assertIn("ema_50", df_indicators.columns)
         self.assertIn("vwap", df_indicators.columns)
+        self.assertIn("bb_width", df_indicators.columns)
+        self.assertIn("pivot", df_indicators.columns)
         
         # Verify the calculation is non-empty for values after the window length
         self.assertFalse(df_indicators['rsi'].iloc[-1] is None)

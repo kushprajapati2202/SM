@@ -265,46 +265,116 @@ def calculate_technical_candidates(data: pd.DataFrame) -> tuple:
               (is_bullish_engulfing or is_hammer)):
             strategy_triggered = "Strategy 9: EMA Support Bounce"
 
-        # If a strategy triggered, score it using the AI Confidence matrix
+        # If a strategy triggered, score it using the dynamic Multi-Factor Scoring Matrix
         if strategy_triggered:
             score = 0
             
-            # 1. Trend (EMA alignment) - 30%
+            # 1. Trend Alignment (Max 25 pts)
             if close_price > ema_50 and ema_50 > ema_200:
-                score += 30
+                score += 25
             elif close_price > ema_200:
                 score += 15
-                
-            # 2. Volume - 20%
-            if volume > 2.0 * volume_avg_20:
+            elif abs(close_price - ema_50) / ema_50 < 0.02:
                 score += 20
-            elif volume > volume_avg_20:
+                
+            # 2. Volume Expansion & Price Confirmation (Max 20 pts)
+            rel_vol = volume / volume_avg_20 if volume_avg_20 > 0 else 1.0
+            if rel_vol > 2.0:
+                score += 20
+            elif rel_vol > 1.2:
+                score += 12
+            elif rel_vol > 0.8:
+                score += 6
+                
+            # 3. Momentum Confirmation (Max 20 pts)
+            momentum_pts = 0
+            if 45 <= rsi <= 68:
+                momentum_pts += 10
+            elif rsi < 38:
+                momentum_pts += 10
+                
+            if macd_hist > prev_macd_hist:
+                momentum_pts += 10
+            elif macd_hist > 0:
+                momentum_pts += 5
+            score += momentum_pts
+                
+            # 4. Pattern Strength (Max 20 pts)
+            if any(p in strategy_triggered for p in ["Cup & Handle", "Bull Flag", "Double Bottom"]):
+                score += 20
+            elif any(p in strategy_triggered for p in ["Engulfing", "Hammer", "Crossover"]):
+                score += 15
+            else:
                 score += 10
                 
-            # 3. Momentum (RSI + MACD) - 20%
-            if (rsi > 45 or rsi < 38) and macd_hist > prev_macd_hist:
-                score += 20
-            elif (rsi > 45 or rsi < 38) or macd_hist > prev_macd_hist:
-                score += 10
-                
-            # 4. Pattern Quality - 40%
-            score += 40  # Triggered an elite pattern
+            # 5. Volatility / Squeeze Breakout (Max 15 pts)
+            bb_width = safe_float(latest.get('bb_width'), 0.0)
+            vol_pts = 0
+            if adx > 22:
+                vol_pts += 8
+            if bb_width > 0 and bb_width < 0.06:
+                vol_pts += 7
+            elif bb_width > 0.12:
+                vol_pts += 3
+            score += vol_pts
             
-            # 5. Volatility (ATR/ADX) - 10%
-            if adx > 25:
-                score += 10
-                
-            # Only trigger suggestions if AI confidence is >= 60
+            # Only trigger suggestions if Swing Strength Score is >= 60
             if score >= 60:
-                target_price = round(close_price * 1.050, 2)  # +5% target
-                stop_loss = round(close_price * 0.965, 2)     # -3.5% stop loss
+                # Dynamic ATR & Support/Resistance exit/stop loss calculation
+                atr_val = safe_float(latest.get('atr'), close_price * 0.02)
+                if atr_val <= 0:
+                    atr_val = close_price * 0.02
+                    
+                target_sl_atr = close_price - 1.5 * atr_val
+                supports_below_close = [s for s in support_resistance.get("supports", []) if s < close_price]
+                if supports_below_close:
+                    nearest_support = max(supports_below_close)
+                    if 0.94 * close_price <= nearest_support <= 0.985 * close_price:
+                        stop_loss = nearest_support
+                    else:
+                        stop_loss = target_sl_atr
+                else:
+                    stop_loss = target_sl_atr
+                stop_loss = round(stop_loss, 2)
+                
+                # Clamp SL between -1.5% and -5%
+                min_sl = round(close_price * 0.985, 2)
+                max_sl = round(close_price * 0.95, 2)
+                if stop_loss > min_sl:
+                    stop_loss = min_sl
+                elif stop_loss < max_sl:
+                    stop_loss = max_sl
+                    
+                # Dynamic Target (Target Risk-Reward of ~1.8x, aligned with Resistance)
+                risk = close_price - stop_loss
+                target_tp_atr = close_price + 1.8 * risk
+                resistances_above_close = [r for r in support_resistance.get("resistances", []) if r > close_price]
+                if resistances_above_close:
+                    nearest_resistance = min(resistances_above_close)
+                    if 1.03 * close_price <= nearest_resistance <= 1.08 * close_price:
+                        target_price = nearest_resistance
+                    else:
+                        target_price = target_tp_atr
+                else:
+                    target_price = target_tp_atr
+                target_price = round(target_price, 2)
+                
+                # Clamp Target between +3.5% and +8.5%
+                min_target = round(close_price * 1.035, 2)
+                max_target = round(close_price * 1.085, 2)
+                if target_price < min_target:
+                    target_price = min_target
+                elif target_price > max_target:
+                    target_price = max_target
+                    
+                potential_return_pct = round(((target_price - close_price) / close_price) * 100, 1)
 
                 bullish_candidates.append({
                     "symbol": original_symbol,
                     "close_price": round(close_price, 2),
                     "target_price": target_price,
                     "stop_loss": stop_loss,
-                    "potential_return": "+5.0%",
+                    "potential_return": f"+{potential_return_pct}%",
                     "rsi": round(rsi, 1),
                     "setup_trigger": f"{strategy_triggered} (ADX: {round(adx,1)}, Rel Vol: {round(volume/volume_avg_20,1)}x)",
                     "accuracy_score": score,
@@ -344,41 +414,109 @@ def calculate_technical_candidates(data: pd.DataFrame) -> tuple:
         if bearish_strategy:
             score = 0
             
-            # 1. Trend (EMA alignment) - 30%
+            # 1. Trend Alignment (Max 25 pts)
             if close_price < ema_50 and ema_50 < ema_200:
-                score += 30
+                score += 25
             elif close_price < ema_200:
                 score += 15
-                
-            # 2. Volume - 20%
-            if volume > 2.0 * volume_avg_20:
+            elif abs(close_price - ema_50) / ema_50 < 0.02:
                 score += 20
-            elif volume > volume_avg_20:
-                score += 10
                 
-            # 3. Momentum (RSI + MACD) - 20%
-            if (rsi < 55 or rsi > 62) and macd_hist < prev_macd_hist:
+            # 2. Volume Expansion (Max 20 pts)
+            rel_vol = volume / volume_avg_20 if volume_avg_20 > 0 else 1.0
+            if rel_vol > 2.0:
                 score += 20
-            elif (rsi < 55 or rsi > 62) or macd_hist < prev_macd_hist:
+            elif rel_vol > 1.2:
+                score += 12
+            elif rel_vol > 0.8:
+                score += 6
+                
+            # 3. Momentum (Max 20 pts)
+            momentum_pts = 0
+            if 35 <= rsi <= 55:
+                momentum_pts += 10
+            elif rsi > 62:
+                momentum_pts += 10
+                
+            if macd_hist < prev_macd_hist:
+                momentum_pts += 10
+            elif macd_hist < 0:
+                momentum_pts += 5
+            score += momentum_pts
+                
+            # 4. Pattern Strength (Max 20 pts)
+            if any(p in bearish_strategy for p in ["Double Top"]):
+                score += 20
+            elif any(p in bearish_strategy for p in ["Engulfing", "Shooting Star", "Crossover"]):
+                score += 15
+            else:
                 score += 10
                 
-            # 4. Pattern Quality - 40%
-            score += 40
-            
-            # 5. Volatility (ATR/ADX) - 10%
-            if adx > 25:
-                score += 10
+            # 5. Volatility (Max 15 pts)
+            bb_width = safe_float(latest.get('bb_width'), 0.0)
+            vol_pts = 0
+            if adx > 22:
+                vol_pts += 8
+            if bb_width > 0 and bb_width < 0.06:
+                vol_pts += 7
+            score += vol_pts
                 
             if score >= 60:
-                target_price = round(close_price * 0.950, 2)  # -5% target
-                stop_loss = round(close_price * 1.035, 2)     # +3.5% stop loss
+                # Dynamic ATR & Support/Resistance stop loss calculation
+                atr_val = safe_float(latest.get('atr'), close_price * 0.02)
+                if atr_val <= 0:
+                    atr_val = close_price * 0.02
+                    
+                target_sl_atr = close_price + 1.5 * atr_val
+                resistances_above_close = [r for r in support_resistance.get("resistances", []) if r > close_price]
+                if resistances_above_close:
+                    nearest_resistance = min(resistances_above_close)
+                    if 1.015 * close_price <= nearest_resistance <= 1.05 * close_price:
+                        stop_loss = nearest_resistance
+                    else:
+                        stop_loss = target_sl_atr
+                else:
+                    stop_loss = target_sl_atr
+                stop_loss = round(stop_loss, 2)
+                
+                # Clamp SL between +1.5% and +5%
+                min_sl = round(close_price * 1.015, 2)
+                max_sl = round(close_price * 1.05, 2)
+                if stop_loss < min_sl:
+                    stop_loss = min_sl
+                elif stop_loss > max_sl:
+                    stop_loss = max_sl
+                    
+                # Dynamic Target (Target Risk-Reward of ~1.8x, aligned with Support)
+                risk = stop_loss - close_price
+                target_tp_atr = close_price - 1.8 * risk
+                supports_below_close = [s for s in support_resistance.get("supports", []) if s < close_price]
+                if supports_below_close:
+                    nearest_support = max(supports_below_close)
+                    if 0.92 * close_price <= nearest_support <= 0.965 * close_price:
+                        target_price = nearest_support
+                    else:
+                        target_price = target_tp_atr
+                else:
+                    target_price = target_tp_atr
+                target_price = round(target_price, 2)
+                
+                # Clamp Target between -3.5% and -8.5%
+                min_target = round(close_price * 0.965, 2)
+                max_target = round(close_price * 0.915, 2)
+                if target_price > min_target:
+                    target_price = min_target
+                elif target_price < max_target:
+                    target_price = max_target
+                    
+                potential_return_pct = round(((close_price - target_price) / close_price) * 100, 1)
 
                 bearish_candidates.append({
                     "symbol": original_symbol,
                     "close_price": round(close_price, 2),
                     "target_price": target_price,
                     "stop_loss": stop_loss,
-                    "potential_return": "+5.0% (Short)",
+                    "potential_return": f"+{potential_return_pct}% (Short)",
                     "rsi": round(rsi, 1),
                     "setup_trigger": f"{bearish_strategy} (ADX: {round(adx,1)}, Rel Vol: {round(volume/volume_avg_20,1)}x)",
                     "accuracy_score": score,

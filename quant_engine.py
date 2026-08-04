@@ -81,6 +81,23 @@ class QuantitativeEngine:
             typical_price = (df['high'] + df['low'] + df['close']) / 3
             df['vwap'] = (typical_price * df['volume']).cumsum() / df['volume'].cumsum()
             
+        # 8. Bollinger Band Width
+        if 'bb_upper' in df.columns and 'bb_lower' in df.columns and 'bb_middle' in df.columns:
+            df['bb_width'] = (df['bb_upper'] - df['bb_lower']) / df['bb_middle']
+        else:
+            df['bb_width'] = 0.0
+
+        # 9. Pivot Points (calculated from yesterday's daily candle)
+        df['prev_high'] = df['high'].shift(1)
+        df['prev_low'] = df['low'].shift(1)
+        df['prev_close'] = df['close'].shift(1)
+        
+        df['pivot'] = (df['prev_high'] + df['prev_low'] + df['prev_close']) / 3
+        df['pivot_r1'] = 2 * df['pivot'] - df['prev_low']
+        df['pivot_s1'] = 2 * df['pivot'] - df['prev_high']
+        df['pivot_r2'] = df['pivot'] + (df['prev_high'] - df['prev_low'])
+        df['pivot_s2'] = df['pivot'] - (df['prev_high'] - df['prev_low'])
+
         return df
 
     @staticmethod
