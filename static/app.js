@@ -330,8 +330,9 @@ document.getElementById("scan-btn").addEventListener("click", async () => {
     document.getElementById("stat-bearish").innerText = "Scanning...";
     document.getElementById("stat-sentinel").innerText = "RUNNING";
     
+    const feed = document.getElementById("data-feed-select").value;
     try {
-        const response = await fetch(`${API_BASE}/scan`, {
+        const response = await fetch(`${API_BASE}/scan?feed=${feed}`, {
             method: "POST",
             headers: {
                 "Content-Type": "application/json"

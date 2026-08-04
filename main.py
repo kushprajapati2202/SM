@@ -398,7 +398,7 @@ def read_root():
     return FileResponse("static/index.html")
 
 @app.post("/scan")
-async def scan_market(force_refresh: bool = False):
+async def scan_market(force_refresh: bool = False, feed: str = "auto"):
     # Append suffix for Yahoo Finance
     tickers = [f"{t}.NS" for t in WATCHLIST]
     tickers_str = " ".join(tickers)
@@ -408,7 +408,13 @@ async def scan_market(force_refresh: bool = False):
         data = await run_in_threadpool(get_cached_market_data)
 
     if data is None:
-        if angel.is_configured():
+        use_angel = False
+        if feed == "angel":
+            use_angel = True
+        elif feed == "auto" and angel.is_configured():
+            use_angel = True
+
+        if use_angel:
             try:
                 print("Fetching data from Angel One SmartAPI...")
                 # Download historical data from Angel One in parallel
@@ -442,7 +448,13 @@ async def scan_market(force_refresh: bool = False):
                 else:
                     raise Exception("No data returned from Angel One for watchlist.")
             except Exception as e:
-                print(f"Angel One data fetch failed: {e}. Falling back to Yahoo Finance...")
+                print(f"Angel One data fetch failed: {e}")
+                if feed == "angel":
+                    raise HTTPException(
+                        status_code=502,
+                        detail=f"Angel One SmartAPI failed: {str(e)}"
+                    )
+                print("Falling back to Yahoo Finance...")
                 data = None
 
         if data is None:
