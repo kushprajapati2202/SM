@@ -58,6 +58,43 @@
             </button>
         </div>
 
+        <!-- Filters & Search Controls -->
+        <div class="filters-container" id="filters-container">
+            <div class="filter-group">
+                <i class="fa-solid fa-magnifying-glass search-icon"></i>
+                <input type="text" id="search-input" placeholder="Search stock symbol...">
+            </div>
+            <div class="filter-group">
+                <i class="fa-solid fa-filter"></i>
+                <select id="strategy-filter">
+                    <option value="">All Strategies</option>
+                    <option value="EMA 50 Pullback">EMA 50 Pullback</option>
+                    <option value="Volume Breakout">Volume Breakout</option>
+                    <option value="Cup & Handle">Cup & Handle Breakout</option>
+                    <option value="Double Bottom">Double Bottom Rebound</option>
+                    <option value="Bull Flag">Bull Flag Breakout</option>
+                    <option value="Oversold RSI">Oversold RSI Rebound</option>
+                    <option value="Bollinger Band">Bollinger Band Support/Rejection</option>
+                    <option value="MACD">MACD Crossover</option>
+                    <option value="EMA Support Bounce">EMA Support Bounce</option>
+                    <option value="Bearish Pullback">Bearish Pullback Rejection</option>
+                    <option value="Volume Breakdown">Volume Breakdown</option>
+                    <option value="Double Top">Double Top Rebound</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <i class="fa-solid fa-sort"></i>
+                <select id="sort-select">
+                    <option value="">Sort by: None</option>
+                    <option value="accuracy-desc">Accuracy (High to Low)</option>
+                    <option value="rsi-asc">RSI (Low to High)</option>
+                    <option value="rsi-desc">RSI (High to Low)</option>
+                    <option value="price-asc">Price (Low to High)</option>
+                    <option value="price-desc">Price (High to Low)</option>
+                </select>
+            </div>
+        </div>
+
         <!-- Global Loader -->
         <div id="loader" class="loader-box">
             <div class="loader-spinner"></div>
@@ -156,6 +193,21 @@
 
         </div>
     </div>
+
+    <!-- TradingView Chart Modal -->
+    <div id="chart-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="modal-title">Interactive Chart</h3>
+                <span class="close-btn" id="modal-close">&times;</span>
+            </div>
+            <div class="modal-body">
+                <div id="tradingview_widget" class="tv-widget"></div>
+            </div>
+        </div>
+    </div>
+
+    <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
     <script src="/static/app.js"></script>
 </body>
 </html>

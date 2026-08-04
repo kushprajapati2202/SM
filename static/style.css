@@ -398,6 +398,147 @@ tr:hover td {
     background: rgba(255, 255, 255, 0.3);
 }
 
+/* Filters & Search Controls */
+.filters-container {
+    display: flex;
+    gap: 16px;
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    backdrop-filter: blur(var(--blur-intensity));
+    -webkit-backdrop-filter: blur(var(--blur-intensity));
+    padding: 12px 16px;
+    border-radius: var(--border-radius-medium);
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.filter-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--system-tertiary-bg);
+    border: 1px solid var(--card-border);
+    padding: 8px 12px;
+    border-radius: var(--border-radius-small);
+    color: var(--text-secondary);
+    font-size: 13px;
+    flex: 1;
+    min-width: 180px;
+}
+
+.filter-group input,
+.filter-group select {
+    background: transparent;
+    border: none;
+    color: var(--text-primary);
+    font-size: 13px;
+    width: 100%;
+    outline: none;
+}
+
+.filter-group select option {
+    background: var(--system-tertiary-bg);
+    color: var(--text-primary);
+}
+
+.filter-group input::placeholder {
+    color: var(--text-tertiary);
+}
+
+/* Clickable Stock Badges */
+.stock-badge {
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.stock-badge:hover {
+    background: rgba(10, 132, 255, 0.2) !important;
+    color: var(--accent-blue) !important;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 8px rgba(10, 132, 255, 0.2);
+}
+
+/* TradingView Chart Modal */
+.modal {
+    display: none; /* Hidden by default */
+    position: fixed;
+    z-index: 2000;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.75);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+}
+
+.modal.active {
+    display: flex;
+    opacity: 1;
+}
+
+.modal-content {
+    background: var(--system-secondary-bg);
+    border: 1px solid var(--card-border);
+    border-radius: var(--border-radius-large);
+    width: 90%;
+    max-width: 900px;
+    height: 80%;
+    max-height: 600px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5);
+    transform: scale(0.95);
+    transition: transform 0.3s ease;
+}
+
+.modal.active .modal-content {
+    transform: scale(1);
+}
+
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--card-border);
+    background: var(--system-tertiary-bg);
+}
+
+.modal-header h3 {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.close-btn {
+    font-size: 24px;
+    font-weight: bold;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: color 0.2s ease;
+}
+
+.close-btn:hover {
+    color: var(--accent-red);
+}
+
+.modal-body {
+    flex: 1;
+    background: #131722; /* TradingView default dark background matching */
+    position: relative;
+}
+
+.tv-widget {
+    width: 100%;
+    height: 100%;
+}
+
 /* Media Queries */
 @media (max-width: 768px) {
     body {
@@ -412,4 +553,15 @@ tr:hover td {
         padding: 12px 10px;
         font-size: 12.5px;
     }
+    
+    .filters-container {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    
+    .modal-content {
+        width: 95%;
+        height: 85%;
+    }
 }
+

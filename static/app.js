@@ -1,10 +1,17 @@
 // Resolve API Base URL depending on how index.html is loaded
 const API_BASE = window.location.protocol === "file:" ? "http://127.0.0.1:8080" : "";
 
+// Local memory to cache last scanned data for client-side search/filter/sort
+let activeScanData = {
+    bullish_candidates: [],
+    bearish_candidates: []
+};
+
 // Tab Switcher Logic for iOS Segmented Controls
 function setupTabNavigation() {
     const buttons = document.querySelectorAll(".segment-btn");
     const sections = document.querySelectorAll(".view-section");
+    const filtersContainer = document.getElementById("filters-container");
 
     buttons.forEach(button => {
         button.addEventListener("click", () => {
@@ -22,9 +29,145 @@ function setupTabNavigation() {
                     sec.classList.remove("active");
                 }
             });
+
+            // Hide filter tools on history page
+            if (targetId === "history-section") {
+                filtersContainer.style.display = "none";
+            } else {
+                filtersContainer.style.display = "flex";
+            }
         });
     });
 }
+
+// Open TradingView widget in modal
+function openTradingViewModal(symbol) {
+    const modal = document.getElementById("chart-modal");
+    const modalTitle = document.getElementById("modal-title");
+    modalTitle.innerText = `${symbol} Interactive Chart`;
+    modal.classList.add("active");
+
+    new TradingView.widget({
+        "autosize": true,
+        "symbol": `NSE:${symbol}`,
+        "interval": "D",
+        "timezone": "Asia/Kolkata",
+        "theme": "dark",
+        "style": "1",
+        "locale": "en",
+        "toolbar_bg": "#f1f3f6",
+        "enable_publishing": false,
+        "hide_side_toolbar": false,
+        "allow_symbol_change": true,
+        "container_id": "tradingview_widget"
+    });
+}
+
+// Modal closing setup
+document.getElementById("modal-close").addEventListener("click", () => {
+    document.getElementById("chart-modal").classList.remove("active");
+});
+window.addEventListener("click", (e) => {
+    const modal = document.getElementById("chart-modal");
+    if (e.target === modal) {
+        modal.classList.remove("active");
+    }
+});
+
+// Click delegation to trigger modal on clicking any stock badge
+document.addEventListener("click", (e) => {
+    const badge = e.target.closest(".stock-badge");
+    if (badge) {
+        const symbol = badge.textContent.trim().replace(".NS", "");
+        openTradingViewModal(symbol);
+    }
+});
+
+// Helper function to build rows
+const populateTable = (candidates, tbody, type) => {
+    if (candidates.length === 0) {
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="9" class="no-results">
+                    <i class="fa-solid fa-circle-info" style="font-size: 20px; color: var(--accent-orange); margin-bottom: 10px; display: block;"></i>
+                    No stocks matching ${type} setups found.
+                </td>
+            </tr>
+        `;
+    } else {
+        tbody.innerHTML = "";
+        candidates.forEach(candidate => {
+            const tr = document.createElement("tr");
+            
+            const isApproved = candidate.status === "APPROVED";
+            const statusClass = isApproved ? "approved" : "blocked";
+            const aiBadge = isApproved 
+                ? `<span class="status-badge approved"><i class="fa-solid fa-shield-check"></i> Clean</span>`
+                : `<span class="status-badge blocked"><i class="fa-solid fa-triangle-exclamation"></i> Flagged</span>`;
+                
+            tr.innerHTML = `
+                <td><span class="stock-badge">${candidate.symbol}</span></td>
+                <td><span class="price-text">₹ ${candidate.close_price}</span></td>
+                <td><span class="${type === 'bullish' ? 'target-text' : 'sl-text'}">₹ ${candidate.target_price}</span></td>
+                <td><span class="${type === 'bullish' ? 'sl-text' : 'target-text'}">₹ ${candidate.stop_loss}</span></td>
+                <td><strong style="color: var(--accent-blue);">${candidate.accuracy_score}%</strong></td>
+                <td><strong>${candidate.rsi}</strong></td>
+                <td><span class="trigger-text">${candidate.setup_trigger}</span></td>
+                <td title="${candidate.ai_reason}">${aiBadge}</td>
+                <td><span class="status-badge ${statusClass}">${candidate.status}</span></td>
+            `;
+            
+            tbody.appendChild(tr);
+        });
+    }
+};
+
+// Filter & Sort core logic
+function applyFiltersAndSorting() {
+    const searchQuery = document.getElementById("search-input").value.toLowerCase().trim();
+    const selectedStrategy = document.getElementById("strategy-filter").value.toLowerCase();
+    const sortVal = document.getElementById("sort-select").value;
+
+    const filterCandidates = (candidates) => {
+        let result = [...candidates];
+
+        // 1. Search Query
+        if (searchQuery) {
+            result = result.filter(c => c.symbol.toLowerCase().includes(searchQuery));
+        }
+
+        // 2. Strategy Filter
+        if (selectedStrategy) {
+            result = result.filter(c => c.setup_trigger.toLowerCase().includes(selectedStrategy));
+        }
+
+        // 3. Sorting
+        if (sortVal === "accuracy-desc") {
+            result.sort((a, b) => b.accuracy_score - a.accuracy_score);
+        } else if (sortVal === "rsi-asc") {
+            result.sort((a, b) => a.rsi - b.rsi);
+        } else if (sortVal === "rsi-desc") {
+            result.sort((a, b) => b.rsi - a.rsi);
+        } else if (sortVal === "price-asc") {
+            result.sort((a, b) => a.close_price - b.close_price);
+        } else if (sortVal === "price-desc") {
+            result.sort((a, b) => b.close_price - a.close_price);
+        }
+
+        return result;
+    };
+
+    const filteredBullish = filterCandidates(activeScanData.bullish_candidates);
+    const filteredBearish = filterCandidates(activeScanData.bearish_candidates);
+
+    populateTable(filteredBullish, document.getElementById("bullish-tbody"), "bullish");
+    populateTable(filteredBearish, document.getElementById("bearish-tbody"), "bearish");
+}
+
+// Bind Filter controls to the filter function
+document.getElementById("search-input").addEventListener("input", applyFiltersAndSorting);
+document.getElementById("strategy-filter").addEventListener("change", applyFiltersAndSorting);
+document.getElementById("sort-select").addEventListener("change", applyFiltersAndSorting);
 
 // Fetch past scans and populate the audit/performance tracker table
 async function loadHistory() {
@@ -129,54 +272,25 @@ document.getElementById("scan-btn").addEventListener("click", async () => {
         
         const data = await response.json();
         
+        // Save scan results in memory
+        activeScanData.bullish_candidates = data.bullish_candidates || [];
+        activeScanData.bearish_candidates = data.bearish_candidates || [];
+        
         // Update Stats Cards
         document.getElementById("stat-total").innerText = `${data.total_scanned} Stocks`;
-        document.getElementById("stat-bullish").innerText = `${data.bullish_count} Found`;
-        document.getElementById("stat-bearish").innerText = `${data.bearish_count} Found`;
+        document.getElementById("stat-bullish").innerText = `${activeScanData.bullish_candidates.length} Found`;
+        document.getElementById("stat-bearish").innerText = `${activeScanData.bearish_candidates.length} Found`;
         document.getElementById("stat-sentinel").innerText = "COMPLETED";
         
-        // Helper function to build rows
-        const populateTable = (candidates, tbody, type) => {
-            if (candidates.length === 0) {
-                tbody.innerHTML = `
-                    <tr>
-                        <td colspan="9" class="no-results">
-                            <i class="fa-solid fa-circle-info" style="font-size: 20px; color: var(--accent-orange); margin-bottom: 10px; display: block;"></i>
-                            No stocks matching ${type} setups today.
-                        </td>
-                    </tr>
-                `;
-            } else {
-                candidates.forEach(candidate => {
-                    const tr = document.createElement("tr");
-                    
-                    const isApproved = candidate.status === "APPROVED";
-                    const statusClass = isApproved ? "approved" : "blocked";
-                    const aiBadge = isApproved 
-                        ? `<span class="status-badge approved"><i class="fa-solid fa-shield-check"></i> Clean</span>`
-                        : `<span class="status-badge blocked"><i class="fa-solid fa-triangle-exclamation"></i> Flagged</span>`;
-                        
-                    tr.innerHTML = `
-                        <td><span class="stock-badge">${candidate.symbol}</span></td>
-                        <td><span class="price-text">₹ ${candidate.close_price}</span></td>
-                        <td><span class="${type === 'bullish' ? 'target-text' : 'sl-text'}">₹ ${candidate.target_price}</span></td>
-                        <td><span class="${type === 'bullish' ? 'sl-text' : 'target-text'}">₹ ${candidate.stop_loss}</span></td>
-                        <td><strong style="color: var(--accent-blue);">${candidate.accuracy_score}%</strong></td>
-                        <td><strong>${candidate.rsi}</strong></td>
-                        <td><span class="trigger-text">${candidate.setup_trigger}</span></td>
-                        <td title="${candidate.ai_reason}">${aiBadge}</td>
-                        <td><span class="status-badge ${statusClass}">${candidate.status}</span></td>
-                    `;
-                    
-                    tbody.appendChild(tr);
-                });
-            }
-        };
-
-        // Populate both tables
-        populateTable(data.bullish_candidates, bullishTbody, 'bullish');
-        populateTable(data.bearish_candidates, bearishTbody, 'bearish');
+        // Populate Tables
+        populateTable(activeScanData.bullish_candidates, bullishTbody, 'bullish');
+        populateTable(activeScanData.bearish_candidates, bearishTbody, 'bearish');
         
+        // Clear filter inputs on new scan
+        document.getElementById("search-input").value = "";
+        document.getElementById("strategy-filter").value = "";
+        document.getElementById("sort-select").value = "";
+
         // Refresh past suggestion tracker
         await loadHistory();
         

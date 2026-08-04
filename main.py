@@ -111,6 +111,24 @@ def save_scan_to_history(result: dict):
     except Exception as e:
         print(f"Failed to write history file: {str(e)}")
 
+def get_live_news_headlines(symbol: str) -> list:
+    try:
+        ticker = yf.Ticker(f"{symbol}.NS")
+        news = ticker.news
+        if news:
+            # Extract headlines
+            headlines = [n.get("title", "") for n in news if n.get("title")]
+            if headlines:
+                return headlines[:4]
+    except Exception as e:
+        print(f"Failed to fetch live news for {symbol}: {str(e)}")
+    
+    # Fallback to general message if news is empty or fails
+    return [
+        f"{symbol} is showing positive breakout indicators based on moving average crossovers.",
+        f"Technical momentum and relative volume for {symbol} has exceeded average levels."
+    ]
+
 @app.get("/")
 def read_root():
     return FileResponse("static/index.html")
@@ -271,11 +289,8 @@ async def scan_market():
                 target_price = round(close_price * 1.050, 2)  # +5% target
                 stop_loss = round(close_price * 0.965, 2)     # -3.5% stop loss
                 
-                mock_news = [
-                    f"{original_symbol} news signals positive long-term momentum.",
-                    f"Technical indicators highlight strong buyer support for {original_symbol}."
-                ]
-                sentiment_report = await sentinel.analyze_sentiment(original_symbol, mock_news)
+                live_headlines = get_live_news_headlines(original_symbol)
+                sentiment_report = await sentinel.analyze_sentiment(original_symbol, live_headlines)
                 validated = sentinel.validate_signal("BUY", sentiment_report)
 
                 bullish_candidates.append({
@@ -348,11 +363,8 @@ async def scan_market():
                 target_price = round(close_price * 0.950, 2)  # -5% target
                 stop_loss = round(close_price * 1.035, 2)     # +3.5% stop loss
                 
-                mock_news = [
-                    f"{original_symbol} faces short-term valuation resistance.",
-                    f"Technical supply overhang noted on {original_symbol} shares."
-                ]
-                sentiment_report = await sentinel.analyze_sentiment(original_symbol, mock_news)
+                live_headlines = get_live_news_headlines(original_symbol)
+                sentiment_report = await sentinel.analyze_sentiment(original_symbol, live_headlines)
                 validated = sentinel.validate_signal("SELL", sentiment_report)
 
                 bearish_candidates.append({
