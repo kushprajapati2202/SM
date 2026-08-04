@@ -15,23 +15,27 @@ WATCHLIST = [
     "TATAELXSI", "JIOFIN", "TITAN", "ULTRACEMCO"
 ]
 
-def run_multi_day_backtest():
-    # Loop over trading days in early July
-    scan_dates = [
-        "2026-07-01", "2026-07-02", "2026-07-03", "2026-07-06", "2026-07-07",
-        "2026-07-08", "2026-07-09", "2026-07-10", "2026-07-13", "2026-07-14",
-        "2026-07-15"
-    ]
-    
-    print(f"============================================================")
-    print(f" RUNNING OPTIMIZED CONFLUENCE BACKTEST SIMULATION (JULY 1 - JULY 15)")
-    print(f"============================================================")
-    
+def run_backtest_simulation(start_date_str: str, end_date_str: str, target_pct: float = 4.0, stop_loss_pct: float = 3.5) -> dict:
+    # Generate business day range
+    try:
+        all_dates = pd.date_range(start=start_date_str, end=end_date_str, freq="B")
+        scan_dates = [d.strftime("%Y-%m-%d") for d in all_dates]
+    except Exception as e:
+        return {"error": f"Invalid date format: {str(e)}", "all_suggestions": []}
+
     all_suggestions = []
     
-    print("Downloading historical data...")
+    # Download data from start of 2025 up to end of the range
     tickers_str = " ".join([f"{t}.NS" for t in WATCHLIST])
-    data = yf.download(tickers_str, start="2025-01-01", progress=False)
+    
+    # Add buffer days before the start date to calculate indicators (e.g. 1 year back)
+    start_dt = datetime.datetime.strptime(start_date_str, "%Y-%m-%d")
+    buffer_start = (start_dt - datetime.timedelta(days=365)).strftime("%Y-%m-%d")
+    
+    try:
+        data = yf.download(tickers_str, start=buffer_start, end=end_date_str, progress=False)
+    except Exception as e:
+        return {"error": f"Failed to download backtest data: {str(e)}", "all_suggestions": []}
     
     for scan_date_str in scan_dates:
         scan_date = datetime.datetime.strptime(scan_date_str, "%Y-%m-%d")
@@ -40,6 +44,8 @@ def run_multi_day_backtest():
             symbol = f"{ticker}.NS"
             try:
                 if isinstance(data.columns, pd.MultiIndex):
+                    if symbol not in data['Open'].columns:
+                        continue
                     ticker_df = pd.DataFrame({
                         "Open": data['Open'][symbol],
                         "High": data['High'][symbol],
@@ -52,12 +58,14 @@ def run_multi_day_backtest():
                     
                 if ticker_df.empty:
                     continue
-                    
+                
+                # Slice data up to scan date
                 scan_df = ticker_df[:scan_date_str]
                 if len(scan_df) < 50:
                     continue
                     
                 latest_date_in_df = scan_df.index[-1]
+                # If the latest date in df is too far from the scan date, skip (e.g. holiday or weekend)
                 if abs((latest_date_in_df - scan_date).days) > 4:
                     continue
                     
@@ -83,27 +91,23 @@ def run_multi_day_backtest():
                 macd_hist = float(latest['macd_hist']) if pd.notna(latest.get('macd_hist')) else 0.0
                 prev_macd_hist = float(prev['macd_hist']) if pd.notna(prev.get('macd_hist')) else 0.0
                 
-                # --- OPTIMIZED STRATEGIES ---
-                # Target: +4.0%, Stop Loss: -3.5%
-                
                 # A. Bullish Setup
                 in_uptrend = close_price >= ema_200 or (close_price >= ema_50 * 0.97)
-                oversold = rsi < 36 or close_price <= (bb_lower * 1.005)  # More strict oversold
+                oversold = rsi < 36 or close_price <= (bb_lower * 1.005)
                 
                 is_bullish_engulfing = bool(latest.get('pattern_bullish_engulfing', False))
                 is_hammer = bool(latest.get('pattern_hammer', False))
                 db_indices = double_patterns.get("double_bottoms", [])
                 is_double_bottom = any(idx >= (len(scan_df_reset) - 15) for idx in db_indices)
-                momentum_reversal = macd_hist > prev_macd_hist and macd_hist > -1.0 # Slightly relaxed MACD hist recovery
+                momentum_reversal = macd_hist > prev_macd_hist and macd_hist > -1.0
                 
                 reversal_confirmed = is_bullish_engulfing or is_hammer or is_double_bottom or momentum_reversal
                 
                 if in_uptrend and oversold and reversal_confirmed:
-                    # Target +4% profit target for highly consistent swing moves
-                    target = round(close_price * 1.040, 2)
-                    sl = round(close_price * 0.965, 2)
+                    target = round(close_price * (1.0 + target_pct / 100.0), 2)
+                    sl = round(close_price * (1.0 - stop_loss_pct / 100.0), 2)
                     
-                    forward_df = ticker_df[scan_date_str:].iloc[1:11]
+                    forward_df = ticker_df[scan_date_str:].iloc[1:11] # 10 trading day forward window
                     outcome = "EXPIRED"
                     hit_day = 0
                     
@@ -132,7 +136,7 @@ def run_multi_day_backtest():
                     
                 # B. Bearish Setup
                 in_downtrend = close_price <= ema_50 or close_price <= ema_200
-                overbought = rsi > 64 or close_price >= (bb_upper * 0.995)  # More strict overbought
+                overbought = rsi > 64 or close_price >= (bb_upper * 0.995)
                 
                 is_bearish_engulfing = bool(latest.get('pattern_bearish_engulfing', False))
                 is_shooting_star = bool(latest.get('pattern_shooting_star', False))
@@ -143,9 +147,8 @@ def run_multi_day_backtest():
                 bearish_confirmed = is_bearish_engulfing or is_shooting_star or is_double_top or momentum_downturn
                 
                 if in_downtrend and overbought and bearish_confirmed:
-                    # Target -4% profit target on short
-                    target = round(close_price * 0.960, 2)
-                    sl = round(close_price * 1.035, 2)
+                    target = round(close_price * (1.0 - target_pct / 100.0), 2)
+                    sl = round(close_price * (1.0 + stop_loss_pct / 100.0), 2)
                     
                     forward_df = ticker_df[scan_date_str:].iloc[1:11]
                     outcome = "EXPIRED"
@@ -174,38 +177,33 @@ def run_multi_day_backtest():
                         "days": hit_day
                     })
                     
-            except Exception as e:
+            except Exception:
                 pass
                 
-    # Print consolidated results
-    print(f"\nCONSOLIDATED OUTCOME LOG:")
-    print("------------------------------------------------------------")
-    achieved = 0
-    failed = 0
-    expired = 0
-    
-    for s in all_suggestions:
-        print(f"[{s['date']}] {s['symbol']} ({s['type']}): Entry={s['close']} | Target={s['target']} | SL={s['sl']} -> Outcome={s['outcome']} (Day {s['days']})")
-        if s["outcome"] == "ACHIEVED":
-            achieved += 1
-        elif s["outcome"] == "FAILED":
-            failed += 1
-        else:
-            expired += 1
-            
-    print("------------------------------------------------------------")
+    # Calculate stats
+    achieved = sum(1 for s in all_suggestions if s["outcome"] == "ACHIEVED")
+    failed = sum(1 for s in all_suggestions if s["outcome"] == "FAILED")
+    expired = sum(1 for s in all_suggestions if s["outcome"] == "EXPIRED")
     total = len(all_suggestions)
-    print(f"Total Trade Setups Triggered: {total}")
-    print(f"Achieved Targets: {achieved}")
-    print(f"Failed (Stop Loss Hit): {failed}")
-    print(f"Expired (Exited Flat): {expired}")
+    closed = achieved + failed
+    win_rate = round((achieved / closed * 100), 1) if closed > 0 else 0.0
+    hit_rate = round((achieved / total * 100), 1) if total > 0 else 0.0
     
-    closed_trades = achieved + failed
-    win_rate = (achieved / closed_trades * 100) if closed_trades > 0 else 0
-    print(f"Win Rate (on Closed Trades): {round(win_rate, 1)}%")
-    overall_hit_rate = (achieved / total * 100) if total > 0 else 0
-    print(f"Overall Target Hit Rate (Including Expired): {round(overall_hit_rate, 1)}%")
-    print("============================================================")
+    return {
+        "total_setups": total,
+        "achieved_count": achieved,
+        "failed_count": failed,
+        "expired_count": expired,
+        "win_rate": win_rate,
+        "hit_rate": hit_rate,
+        "suggestions": all_suggestions
+    }
 
 if __name__ == "__main__":
-    run_multi_day_backtest()
+    # Fallback/default runner for CLI
+    res = run_backtest_simulation("2026-07-01", "2026-07-15")
+    print(f"Total Trade Setups Triggered: {res['total_setups']}")
+    print(f"Achieved Targets: {res['achieved_count']}")
+    print(f"Failed: {res['failed_count']}")
+    print(f"Expired: {res['expired_count']}")
+    print(f"Win Rate: {res['win_rate']}%")

@@ -56,6 +56,9 @@
             <button class="segment-btn" data-target="history-section">
                 <i class="fa-solid fa-clock-rotate-left"></i> History Log
             </button>
+            <button class="segment-btn" data-target="backtest-section">
+                <i class="fa-solid fa-flask"></i> Backtest Lab
+            </button>
         </div>
 
         <!-- Filters & Search Controls -->
@@ -191,12 +194,92 @@
                 </div>
             </div>
 
+            <!-- Section 4: Backtest Lab -->
+            <div id="backtest-section" class="view-section">
+                <div class="table-card" style="margin-bottom: 24px;">
+                    <h3><i class="fa-solid fa-sliders"></i> Backtest Parameters</h3>
+                    <form id="backtest-form" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; align-items: flex-end;">
+                        <div class="input-group">
+                            <label style="display: block; font-size: 11px; color: var(--text-secondary); text-transform: uppercase; margin-bottom: 6px; font-weight: 600;">Start Date</label>
+                            <div class="filter-group">
+                                <input type="date" id="bt-start-date" value="2026-07-01" required>
+                            </div>
+                        </div>
+                        <div class="input-group">
+                            <label style="display: block; font-size: 11px; color: var(--text-secondary); text-transform: uppercase; margin-bottom: 6px; font-weight: 600;">End Date</label>
+                            <div class="filter-group">
+                                <input type="date" id="bt-end-date" value="2026-07-15" required>
+                            </div>
+                        </div>
+                        <div class="input-group">
+                            <label style="display: block; font-size: 11px; color: var(--text-secondary); text-transform: uppercase; margin-bottom: 6px; font-weight: 600;">Target Profit (%)</label>
+                            <div class="filter-group">
+                                <input type="number" id="bt-target" value="4.0" step="0.1" min="0.5" required>
+                            </div>
+                        </div>
+                        <div class="input-group">
+                            <label style="display: block; font-size: 11px; color: var(--text-secondary); text-transform: uppercase; margin-bottom: 6px; font-weight: 600;">Stop Loss (%)</label>
+                            <div class="filter-group">
+                                <input type="number" id="bt-sl" value="3.5" step="0.1" min="0.5" required>
+                            </div>
+                        </div>
+                        <button type="submit" id="run-backtest-btn" class="primary-btn" style="height: 41px; justify-content: center; width: 100%; border-radius: var(--border-radius-small); box-shadow: none;">
+                            <i class="fa-solid fa-play"></i> Run Simulation
+                        </button>
+                    </form>
+                </div>
+
+                <div class="stats-grid" id="backtest-stats" style="display: none; margin-bottom: 24px;">
+                    <div class="stat-card">
+                        <span>Win Rate (Closed)</span>
+                        <strong id="bt-win-rate" style="color: var(--accent-green);">-</strong>
+                    </div>
+                    <div class="stat-card">
+                        <span>Target Hit Rate (Overall)</span>
+                        <strong id="bt-hit-rate" style="color: var(--accent-blue);">-</strong>
+                    </div>
+                    <div class="stat-card">
+                        <span>Total Setups</span>
+                        <strong id="bt-total-setups">-</strong>
+                    </div>
+                    <div class="stat-card">
+                        <span>Achieved / Failed / Expired</span>
+                        <strong id="bt-outcome-split" style="font-size: 18px; margin-top: 14px;">-</strong>
+                    </div>
+                </div>
+
+                <div class="table-card">
+                    <h3><i class="fa-solid fa-list"></i> Simulation Trade Logs</h3>
+                    <div class="table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Date</th>
+                                    <th>Symbol</th>
+                                    <th>Type</th>
+                                    <th>Entry</th>
+                                    <th>Target</th>
+                                    <th>Stop Loss</th>
+                                    <th>Outcome</th>
+                                    <th>Duration</th>
+                                </tr>
+                            </thead>
+                            <tbody id="backtest-tbody">
+                                <tr>
+                                    <td colspan="8" class="no-results">Fill parameters above and run the backtester simulation.</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
         </div>
     </div>
 
-    <!-- TradingView Chart Modal -->
+    <!-- Detailed Stock Info & Chart Modal -->
     <div id="chart-modal" class="modal">
-        <div class="modal-content">
+        <div class="modal-content details-modal-content">
             <div class="modal-header">
                 <h3 id="modal-title">Interactive Chart</h3>
                 <div class="modal-header-actions" style="display: flex; align-items: center; gap: 16px;">
@@ -206,8 +289,43 @@
                     <span class="close-btn" id="modal-close">&times;</span>
                 </div>
             </div>
-            <div class="modal-body">
-                <div id="tradingview_widget" class="tv-widget"></div>
+            <div class="modal-body split-modal-body">
+                <div class="modal-chart-pane">
+                    <div id="tradingview_widget" class="tv-widget"></div>
+                </div>
+                <div class="modal-info-pane">
+                    <div class="info-section">
+                        <h4>Technical Summary</h4>
+                        <div class="info-grid">
+                            <div class="info-item"><span>50 EMA</span><strong id="m-ema50">-</strong></div>
+                            <div class="info-item"><span>200 EMA</span><strong id="m-ema200">-</strong></div>
+                            <div class="info-item"><span>BB Upper</span><strong id="m-bb-upper">-</strong></div>
+                            <div class="info-item"><span>BB Lower</span><strong id="m-bb-lower">-</strong></div>
+                        </div>
+                    </div>
+                    <div class="info-section">
+                        <h4>Support & Resistance</h4>
+                        <div class="info-grid-2">
+                            <div class="info-item"><span>Supports</span><span id="m-supports" class="level-list">-</span></div>
+                            <div class="info-item"><span>Resistances</span><span id="m-resistances" class="level-list">-</span></div>
+                        </div>
+                    </div>
+                    <div class="info-section">
+                        <h4>AI Sentinel Report</h4>
+                        <div class="sentiment-box" id="m-sentiment-box">
+                            <div class="sentiment-header">
+                                <span id="m-sentiment-label">Sentiment: NEUTRAL</span>
+                            </div>
+                            <p id="m-sentiment-reason">-</p>
+                        </div>
+                    </div>
+                    <div class="info-section">
+                        <h4>Recent Headlines</h4>
+                        <ul class="headlines-list" id="m-headlines-list">
+                            <li>No recent headlines found.</li>
+                        </ul>
+                    </div>
+                </div>
             </div>
         </div>
     </div>

@@ -12,6 +12,7 @@ ENV/
 
 # Project-specific
 scan_history.json
+*.pkl
 
 # OS files
 .DS_Store

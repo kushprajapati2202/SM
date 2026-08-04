@@ -30,8 +30,8 @@ function setupTabNavigation() {
                 }
             });
 
-            // Hide filter tools on history page
-            if (targetId === "history-section") {
+            // Hide filter tools on history & backtest pages
+            if (targetId === "history-section" || targetId === "backtest-section") {
                 filtersContainer.style.display = "none";
             } else {
                 filtersContainer.style.display = "flex";
@@ -40,17 +40,24 @@ function setupTabNavigation() {
     });
 }
 
-// Open TradingView widget in modal
-function openTradingViewModal(symbol) {
+// Find candidate details by symbol
+function findCandidate(symbol) {
+    return activeScanData.bullish_candidates.find(c => c.symbol === symbol) ||
+           activeScanData.bearish_candidates.find(c => c.symbol === symbol);
+}
+
+// Open TradingView widget and display detailed indicators in modal
+function openDetailsModal(symbol) {
     const modal = document.getElementById("chart-modal");
     const modalTitle = document.getElementById("modal-title");
     const externalLink = document.getElementById("modal-external-link");
     
-    modalTitle.innerText = `${symbol} Interactive Chart`;
+    modalTitle.innerText = `${symbol} Interactive Chart & Tech Details`;
     externalLink.href = `https://www.tradingview.com/symbols/NSE-${symbol}/`;
     
     modal.classList.add("active");
 
+    // Initialize TradingView Widget
     new TradingView.widget({
         "autosize": true,
         "symbol": `NSE:${symbol}`,
@@ -65,6 +72,66 @@ function openTradingViewModal(symbol) {
         "allow_symbol_change": true,
         "container_id": "tradingview_widget"
     });
+
+    // Populate quantitative and sentinel details
+    const candidate = findCandidate(symbol);
+    
+    // Select elements
+    const ema50El = document.getElementById("m-ema50");
+    const ema200El = document.getElementById("m-ema200");
+    const bbUpperEl = document.getElementById("m-bb-upper");
+    const bbLowerEl = document.getElementById("m-bb-lower");
+    const supportsEl = document.getElementById("m-supports");
+    const resistancesEl = document.getElementById("m-resistances");
+    const sentLabelEl = document.getElementById("m-sentiment-label");
+    const sentReasonEl = document.getElementById("m-sentiment-reason");
+    const sentBox = document.getElementById("m-sentiment-box");
+    const headlinesList = document.getElementById("m-headlines-list");
+
+    if (candidate) {
+        ema50El.innerText = `₹ ${candidate.ema_50}`;
+        ema200El.innerText = `₹ ${candidate.ema_200}`;
+        bbUpperEl.innerText = `₹ ${candidate.bb_upper}`;
+        bbLowerEl.innerText = `₹ ${candidate.bb_lower}`;
+        supportsEl.innerText = candidate.supports && candidate.supports.length ? candidate.supports.map(s => `₹${s}`).join(" | ") : "None Detected";
+        resistancesEl.innerText = candidate.resistances && candidate.resistances.length ? candidate.resistances.map(r => `₹${r}`).join(" | ") : "None Detected";
+        
+        const sentiment = candidate.ai_sentiment || "NEUTRAL";
+        sentLabelEl.innerText = `Sentiment: ${sentiment}`;
+        sentReasonEl.innerText = candidate.ai_reason || "No detail provided.";
+        
+        // Sentiment color accents
+        sentBox.style.borderColor = "var(--card-border)";
+        if (sentiment === "POSITIVE") {
+            sentBox.style.borderColor = "var(--accent-green)";
+        } else if (sentiment === "NEGATIVE") {
+            sentBox.style.borderColor = "var(--accent-red)";
+        }
+        
+        // Headlines
+        headlinesList.innerHTML = "";
+        if (candidate.headlines && candidate.headlines.length) {
+            candidate.headlines.forEach(headline => {
+                const li = document.createElement("li");
+                li.innerText = headline;
+                headlinesList.appendChild(li);
+            });
+        } else {
+            headlinesList.innerHTML = "<li>No recent headlines analyzed.</li>";
+        }
+    } else {
+        // Fallback for symbols opened from history/backtest logs
+        ema50El.innerText = "N/A";
+        ema200El.innerText = "N/A";
+        bbUpperEl.innerText = "N/A";
+        bbLowerEl.innerText = "N/A";
+        supportsEl.innerText = "Scan details not in memory";
+        resistancesEl.innerText = "Scan details not in memory";
+        sentLabelEl.innerText = "Sentiment: UNKNOWN";
+        sentReasonEl.innerText = "Open stock from active Scan page to view details.";
+        sentBox.style.borderColor = "var(--card-border)";
+        headlinesList.innerHTML = "<li>No news available for historical logs.</li>";
+    }
 }
 
 // Modal closing setup
@@ -83,7 +150,7 @@ document.addEventListener("click", (e) => {
     const badge = e.target.closest(".stock-badge");
     if (badge) {
         const symbol = badge.textContent.trim().replace(".NS", "");
-        openTradingViewModal(symbol);
+        openDetailsModal(symbol);
     }
 });
 
@@ -242,6 +309,7 @@ async function loadHistory() {
     }
 }
 
+// Active scanning logic
 document.getElementById("scan-btn").addEventListener("click", async () => {
     const btn = document.getElementById("scan-btn");
     const loader = document.getElementById("loader");
@@ -321,6 +389,95 @@ document.getElementById("scan-btn").addEventListener("click", async () => {
         board.style.opacity = "1";
         btn.disabled = false;
         btn.innerHTML = `<i class="fa-solid fa-satellite-dish"></i> Scan Watchlist`;
+    }
+});
+
+// Run Backtester Logic
+document.getElementById("backtest-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    
+    const runBtn = document.getElementById("run-backtest-btn");
+    const loader = document.getElementById("loader");
+    const statsGrid = document.getElementById("backtest-stats");
+    const tbody = document.getElementById("backtest-tbody");
+    
+    const payload = {
+        start_date: document.getElementById("bt-start-date").value,
+        end_date: document.getElementById("bt-end-date").value,
+        target_pct: parseFloat(document.getElementById("bt-target").value),
+        stop_loss_pct: parseFloat(document.getElementById("bt-sl").value)
+    };
+    
+    runBtn.disabled = true;
+    runBtn.innerHTML = `<i class="fa-solid fa-sync fa-spin"></i> Simulating...`;
+    loader.style.display = "flex";
+    statsGrid.style.display = "none";
+    tbody.innerHTML = `<tr><td colspan="8" class="no-results">Simulating trade configurations across business days...</td></tr>`;
+    
+    try {
+        const response = await fetch(`${API_BASE}/backtest`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify(payload)
+        });
+        
+        if (!response.ok) {
+            const errData = await response.json();
+            throw new Error(errData.detail || response.statusText);
+        }
+        
+        const data = await response.json();
+        
+        // Show and populate stats
+        statsGrid.style.display = "grid";
+        document.getElementById("bt-win-rate").innerText = `${data.win_rate}%`;
+        document.getElementById("bt-hit-rate").innerText = `${data.hit_rate}%`;
+        document.getElementById("bt-total-setups").innerText = data.total_setups;
+        document.getElementById("bt-outcome-split").innerText = `${data.achieved_count} / ${data.failed_count} / ${data.expired_count}`;
+        
+        // Populate logs
+        if (data.suggestions.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="8" class="no-results">No trade setups matched the backtest criteria.</td></tr>`;
+        } else {
+            tbody.innerHTML = "";
+            data.suggestions.forEach(item => {
+                const tr = document.createElement("tr");
+                
+                let outBadge = "";
+                if (item.outcome === "ACHIEVED") {
+                    outBadge = `<span class="status-badge achieved"><i class="fa-solid fa-circle-check"></i> ACHIEVED</span>`;
+                } else if (item.outcome === "FAILED") {
+                    outBadge = `<span class="status-badge failed"><i class="fa-solid fa-circle-xmark"></i> FAILED</span>`;
+                } else {
+                    outBadge = `<span class="status-badge expired"><i class="fa-solid fa-circle-minus"></i> EXPIRED</span>`;
+                }
+                
+                const isBuy = item.type === "BUY";
+                const typeStyle = `font-weight: 600; color: ${isBuy ? 'var(--accent-green)' : 'var(--accent-red)'}`;
+                
+                tr.innerHTML = `
+                    <td><span style="font-family: monospace; font-size: 12px; color: var(--text-secondary);">${item.date}</span></td>
+                    <td><span class="stock-badge">${item.symbol}</span></td>
+                    <td><span style="${typeStyle}">${item.type}</span></td>
+                    <td><span class="price-text">₹ ${item.close}</span></td>
+                    <td><span class="target-text">₹ ${item.target}</span></td>
+                    <td><span class="sl-text">₹ ${item.sl}</span></td>
+                    <td>${outBadge}</td>
+                    <td><strong>${item.days ? `${item.days} Days` : "-"}</strong></td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+        
+    } catch (err) {
+        alert(`Backtest Simulation failed: ${err.message}`);
+        tbody.innerHTML = `<tr><td colspan="8" class="no-results" style="color: var(--accent-red);"><i class="fa-solid fa-triangle-exclamation"></i> Simulation Error: ${err.message}</td></tr>`;
+    } finally {
+        loader.style.display = "none";
+        runBtn.disabled = false;
+        runBtn.innerHTML = `<i class="fa-solid fa-play"></i> Run Simulation`;
     }
 });
 

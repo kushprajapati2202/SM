@@ -565,3 +565,160 @@ tr:hover td {
     }
 }
 
+/* Split Details Modal Styles */
+.details-modal-content {
+    max-width: 1100px;
+    height: 90%;
+    max-height: 750px;
+}
+
+.split-modal-body {
+    display: flex;
+    flex-direction: row;
+    height: 100%;
+    overflow: hidden;
+}
+
+.modal-chart-pane {
+    flex: 2;
+    height: 100%;
+}
+
+.modal-info-pane {
+    flex: 1;
+    height: 100%;
+    background-color: var(--system-secondary-bg);
+    border-left: 1px solid var(--card-border);
+    padding: 20px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.info-section h4 {
+    font-size: 11px;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    margin-bottom: 10px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    padding-bottom: 6px;
+    font-weight: 700;
+}
+
+.info-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+}
+
+.info-grid-2 {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.info-item {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.info-item span {
+    font-size: 10px;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+}
+
+.info-item strong {
+    font-size: 15px;
+    color: var(--text-primary);
+}
+
+.level-list {
+    font-family: monospace;
+    font-size: 12px;
+    color: var(--accent-teal);
+    background-color: rgba(100, 210, 255, 0.08);
+    padding: 6px 10px;
+    border-radius: var(--border-radius-small);
+    line-height: 1.4;
+    word-break: break-all;
+}
+
+.sentiment-box {
+    background-color: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--card-border);
+    border-radius: var(--border-radius-medium);
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.sentiment-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.sentiment-box p {
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.4;
+}
+
+.headlines-list {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.headlines-list li {
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.4;
+    padding-left: 14px;
+    position: relative;
+}
+
+.headlines-list li::before {
+    content: "•";
+    color: var(--accent-blue);
+    position: absolute;
+    left: 0;
+    top: 0;
+    font-size: 14px;
+}
+
+/* Form layout helpers */
+.input-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+/* Media Query adjustment for split modal */
+@media (max-width: 900px) {
+    .split-modal-body {
+        flex-direction: column;
+        overflow-y: auto;
+    }
+    .modal-chart-pane {
+        height: 350px;
+        flex: none;
+    }
+    .modal-info-pane {
+        border-left: none;
+        border-top: 1px solid var(--card-border);
+        height: auto;
+        overflow-y: visible;
+        flex: none;
+    }
+}
+
+

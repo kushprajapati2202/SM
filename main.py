@@ -19,6 +19,7 @@ from pattern_detector import PatternDetector
 from ai_sentinel import AISentinel
 
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.concurrency import run_in_threadpool
 
 app = FastAPI(
     title="Indian Stock Market Swing Scanner",
@@ -53,6 +54,30 @@ WATCHLIST = [
     "TATAMOTORS", "TATASTEEL", "TCS", "TECHM", "TITAN",
     "ULTRACEMCO", "WIPRO", "SHRIRAMFIN", "TRENT", "JIOFIN"
 ]
+
+CACHE_FILE = "yf_cache.pkl"
+
+def get_cached_market_data() -> Optional[pd.DataFrame]:
+    if os.path.exists(CACHE_FILE):
+        try:
+            mtime = datetime.datetime.fromtimestamp(os.path.getmtime(CACHE_FILE))
+            now = datetime.datetime.now()
+            # Cache is valid for 1 hour
+            if (now - mtime).total_seconds() < 3600:
+                df = pd.read_pickle(CACHE_FILE)
+                if not df.empty:
+                    print("Serving market data from cache...")
+                    return df
+        except Exception as e:
+            print(f"Failed to read cache: {e}")
+    return None
+
+def save_market_data_to_cache(df: pd.DataFrame):
+    try:
+        df.to_pickle(CACHE_FILE)
+        print("Market data successfully cached.")
+    except Exception as e:
+        print(f"Failed to save cache: {e}")
 
 def save_scan_to_history(result: dict):
     history_file = "scan_history.json"
@@ -129,25 +154,7 @@ def get_live_news_headlines(symbol: str) -> list:
         f"Technical momentum and relative volume for {symbol} has exceeded average levels."
     ]
 
-@app.get("/")
-def read_root():
-    return FileResponse("static/index.html")
-
-@app.post("/scan")
-async def scan_market():
-    # Append suffix for Yahoo Finance
-    tickers = [f"{t}.NS" for t in WATCHLIST]
-    tickers_str = " ".join(tickers)
-
-    try:
-        # Download historical data (1 year of daily candles to support 200 EMA calculation)
-        data = yf.download(tickers_str, period="1y", interval="1d", group_by="ticker", progress=False)
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to fetch market data from Yahoo Finance: {str(e)}"
-        )
-
+def calculate_technical_candidates(data: pd.DataFrame) -> tuple:
     bullish_candidates = []
     bearish_candidates = []
 
@@ -288,10 +295,6 @@ async def scan_market():
             if score >= 60:
                 target_price = round(close_price * 1.050, 2)  # +5% target
                 stop_loss = round(close_price * 0.965, 2)     # -3.5% stop loss
-                
-                live_headlines = get_live_news_headlines(original_symbol)
-                sentiment_report = await sentinel.analyze_sentiment(original_symbol, live_headlines)
-                validated = sentinel.validate_signal("BUY", sentiment_report)
 
                 bullish_candidates.append({
                     "symbol": original_symbol,
@@ -302,9 +305,13 @@ async def scan_market():
                     "rsi": round(rsi, 1),
                     "setup_trigger": f"{strategy_triggered} (ADX: {round(adx,1)}, Rel Vol: {round(volume/volume_avg_20,1)}x)",
                     "accuracy_score": score,
-                    "ai_sentiment": sentiment_report.get("sentiment", "NEUTRAL"),
-                    "ai_reason": sentiment_report.get("reasoning", ""),
-                    "status": "APPROVED" if validated else "BLOCKED_BY_RISK"
+                    "ema_50": round(ema_50, 2),
+                    "ema_200": round(ema_200, 2),
+                    "bb_lower": round(bb_lower, 2),
+                    "bb_upper": round(bb_upper, 2),
+                    "supports": [round(s, 2) for s in support_resistance.get("supports", [])[-3:]],
+                    "resistances": [round(r, 2) for r in support_resistance.get("resistances", [])[-3:]],
+                    "headlines": []
                 })
 
         # ----------------------------------------------------
@@ -362,10 +369,6 @@ async def scan_market():
             if score >= 60:
                 target_price = round(close_price * 0.950, 2)  # -5% target
                 stop_loss = round(close_price * 1.035, 2)     # +3.5% stop loss
-                
-                live_headlines = get_live_news_headlines(original_symbol)
-                sentiment_report = await sentinel.analyze_sentiment(original_symbol, live_headlines)
-                validated = sentinel.validate_signal("SELL", sentiment_report)
 
                 bearish_candidates.append({
                     "symbol": original_symbol,
@@ -376,10 +379,65 @@ async def scan_market():
                     "rsi": round(rsi, 1),
                     "setup_trigger": f"{bearish_strategy} (ADX: {round(adx,1)}, Rel Vol: {round(volume/volume_avg_20,1)}x)",
                     "accuracy_score": score,
-                    "ai_sentiment": sentiment_report.get("sentiment", "NEUTRAL"),
-                    "ai_reason": sentiment_report.get("reasoning", ""),
-                    "status": "APPROVED" if validated else "BLOCKED_BY_RISK"
+                    "ema_50": round(ema_50, 2),
+                    "ema_200": round(ema_200, 2),
+                    "bb_lower": round(bb_lower, 2),
+                    "bb_upper": round(bb_upper, 2),
+                    "supports": [round(s, 2) for s in support_resistance.get("supports", [])[-3:]],
+                    "resistances": [round(r, 2) for r in support_resistance.get("resistances", [])[-3:]],
+                    "headlines": []
                 })
+
+    return bullish_candidates, bearish_candidates
+
+@app.get("/")
+def read_root():
+    return FileResponse("static/index.html")
+
+@app.post("/scan")
+async def scan_market(force_refresh: bool = False):
+    # Append suffix for Yahoo Finance
+    tickers = [f"{t}.NS" for t in WATCHLIST]
+    tickers_str = " ".join(tickers)
+
+    data = None
+    if not force_refresh:
+        data = await run_in_threadpool(get_cached_market_data)
+
+    if data is None:
+        try:
+            # Download historical data (1 year of daily candles to support 200 EMA calculation)
+            data = await run_in_threadpool(yf.download, tickers_str, period="1y", interval="1d", group_by="ticker", progress=False)
+            await run_in_threadpool(save_market_data_to_cache, data)
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to fetch market data from Yahoo Finance: {str(e)}"
+            )
+
+    # Calculate indicators in threadpool to prevent event loop blocking
+    bullish_candidates, bearish_candidates = await run_in_threadpool(calculate_technical_candidates, data)
+
+    # Perform async news/AI sentiment analysis sequentially
+    for c in bullish_candidates:
+        sym = c["symbol"]
+        live_headlines = await run_in_threadpool(get_live_news_headlines, sym)
+        c["headlines"] = live_headlines
+        sentiment_report = await sentinel.analyze_sentiment(sym, live_headlines)
+        validated = sentinel.validate_signal("BUY", sentiment_report)
+        c["ai_sentiment"] = sentiment_report.get("sentiment", "NEUTRAL")
+        c["ai_reason"] = sentiment_report.get("reasoning", "")
+        c["status"] = "APPROVED" if validated else "BLOCKED_BY_RISK"
+
+    for c in bearish_candidates:
+        sym = c["symbol"]
+        live_headlines = await run_in_threadpool(get_live_news_headlines, sym)
+        c["headlines"] = live_headlines
+        sentiment_report = await sentinel.analyze_sentiment(sym, live_headlines)
+        validated = sentinel.validate_signal("SELL", sentiment_report)
+        c["ai_sentiment"] = sentiment_report.get("sentiment", "NEUTRAL")
+        c["ai_reason"] = sentiment_report.get("reasoning", "")
+        c["status"] = "APPROVED" if validated else "BLOCKED_BY_RISK"
 
     # Sort candidates by accuracy score descending
     bullish_candidates = sorted(bullish_candidates, key=lambda x: x['accuracy_score'], reverse=True)
@@ -545,3 +603,26 @@ async def get_history():
     # Sort history (latest scan date first)
     flattened_history = sorted(flattened_history, key=lambda x: x['scan_date'], reverse=True)
     return {"history": flattened_history}
+
+class BacktestRequest(BaseModel):
+    start_date: str
+    end_date: str
+    target_pct: float
+    stop_loss_pct: float
+
+@app.post("/backtest")
+async def run_backtest(req: BacktestRequest):
+    from backtest import run_backtest_simulation
+    try:
+        result = await run_in_threadpool(
+            run_backtest_simulation,
+            start_date_str=req.start_date,
+            end_date_str=req.end_date,
+            target_pct=req.target_pct,
+            stop_loss_pct=req.stop_loss_pct
+        )
+        if "error" in result:
+            raise HTTPException(status_code=400, detail=result["error"])
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
