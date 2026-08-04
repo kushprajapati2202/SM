@@ -9,6 +9,7 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
@@ -107,11 +108,7 @@ def save_scan_to_history(result: dict):
 
 @app.get("/")
 def read_root():
-    return {
-        "status": "active",
-        "scanner": "NSE Swing Trading Scanner (Long/Short)",
-        "watchlist_count": len(WATCHLIST)
-    }
+    return FileResponse("static/index.html")
 
 @app.post("/scan")
 async def scan_market():
