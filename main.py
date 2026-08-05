@@ -60,40 +60,76 @@ WATCHLIST = [
 
 CACHE_FILE = "yf_cache.pkl"
 
-def get_cached_market_data() -> Optional[pd.DataFrame]:
-    if os.path.exists(CACHE_FILE):
+def get_writable_path(filename: str) -> str:
+    # If running in Vercel or local directory is read-only, use /tmp
+    if os.environ.get("VERCEL") or not os.access(".", os.W_OK):
+        return os.path.join("/tmp", filename)
+    return filename
+
+def load_json_file(filename: str, default_val: Any) -> Any:
+    # 1. Try writable path
+    writable_path = get_writable_path(filename)
+    if os.path.exists(writable_path):
         try:
-            mtime = datetime.datetime.fromtimestamp(os.path.getmtime(CACHE_FILE))
+            with open(writable_path, "r") as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"Failed to read from writable path {writable_path}: {e}")
+            
+    # 2. Try current directory
+    if os.path.exists(filename):
+        try:
+            with open(filename, "r") as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"Failed to read from local fallback {filename}: {e}")
+            
+    return default_val
+
+def get_cached_market_data() -> Optional[pd.DataFrame]:
+    cache_path = get_writable_path(CACHE_FILE)
+    # Check if writable cache exists
+    if os.path.exists(cache_path):
+        try:
+            mtime = datetime.datetime.fromtimestamp(os.path.getmtime(cache_path))
             now = datetime.datetime.now()
             # Cache is valid for 1 hour
             if (now - mtime).total_seconds() < 3600:
-                df = pd.read_pickle(CACHE_FILE)
+                df = pd.read_pickle(cache_path)
                 if not df.empty:
                     print("Serving market data from cache...")
                     return df
         except Exception as e:
-            print(f"Failed to read cache: {e}")
+            print(f"Failed to read cache from {cache_path}: {e}")
+            
+    # Also check local file as fallback
+    if cache_path != CACHE_FILE and os.path.exists(CACHE_FILE):
+        try:
+            mtime = datetime.datetime.fromtimestamp(os.path.getmtime(CACHE_FILE))
+            now = datetime.datetime.now()
+            if (now - mtime).total_seconds() < 3600:
+                df = pd.read_pickle(CACHE_FILE)
+                if not df.empty:
+                    print("Serving market data from local cache fallback...")
+                    return df
+        except Exception as e:
+            print(f"Failed to read local cache fallback: {e}")
+            
     return None
 
 def save_market_data_to_cache(df: pd.DataFrame):
     try:
-        df.to_pickle(CACHE_FILE)
-        print("Market data successfully cached.")
+        cache_path = get_writable_path(CACHE_FILE)
+        df.to_pickle(cache_path)
+        print(f"Market data successfully cached to {cache_path}.")
     except Exception as e:
         print(f"Failed to save cache: {e}")
 
 def save_scan_to_history(result: dict):
     history_file = "scan_history.json"
-    
-    history_data = []
-    if os.path.exists(history_file):
-        try:
-            with open(history_file, "r") as f:
-                history_data = json.load(f)
-                if not isinstance(history_data, list):
-                    history_data = []
-        except Exception:
-            history_data = []
+    history_data = load_json_file(history_file, [])
+    if not isinstance(history_data, list):
+        history_data = []
             
     today_str = datetime.datetime.now().strftime("%Y-%m-%d")
     
@@ -134,7 +170,8 @@ def save_scan_to_history(result: dict):
         history_data.append(record)
     
     try:
-        with open(history_file, "w") as f:
+        writable_path = get_writable_path(history_file)
+        with open(writable_path, "w") as f:
             json.dump(history_data, f, indent=2)
     except Exception as e:
         print(f"Failed to write history file: {str(e)}")
@@ -650,70 +687,120 @@ async def scan_market(force_refresh: bool = False, feed: str = "auto"):
 @app.get("/history")
 async def get_history():
     history_file = "scan_history.json"
-    if not os.path.exists(history_file):
-        return {"history": []}
-        
-    try:
-        with open(history_file, "r") as f:
-            scans = json.load(f)
-    except Exception:
+    scans = load_json_file(history_file, [])
+    if not scans:
         return {"history": []}
         
     updated_scans = False
     flattened_history = []
     
+    # 1. Identify all active candidates and find the earliest scan date
+    active_tickers = set()
+    earliest_date = None
+    
     for scan in scans:
         timestamp_str = scan.get("timestamp")
-        scan_date = datetime.datetime.fromisoformat(timestamp_str)
+        if not timestamp_str:
+            continue
+        try:
+            scan_date = datetime.datetime.fromisoformat(timestamp_str)
+        except Exception:
+            continue
+            
+        for c in scan.get("bullish_candidates", []) + scan.get("bearish_candidates", []):
+            if c.get("outcome", "ACTIVE") == "ACTIVE":
+                active_tickers.add(c["symbol"])
+                if earliest_date is None or scan_date < earliest_date:
+                    earliest_date = scan_date
+                    
+    # 2. Batch download data from Yahoo Finance for all active tickers
+    batch_data = {}
+    if active_tickers:
+        tickers_list = [f"{sym}.NS" for sym in active_tickers]
+        start_date_str = earliest_date.strftime("%Y-%m-%d")
+        end_date_str = (datetime.datetime.now() + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
         
+        try:
+            print(f"Batch downloading {len(tickers_list)} active tickers from {start_date_str} to {end_date_str}...")
+            # Use run_in_threadpool to keep it non-blocking
+            df_batch = await run_in_threadpool(
+                yf.download,
+                tickers_list,
+                start=start_date_str,
+                end=end_date_str,
+                group_by="ticker",
+                progress=False
+            )
+            
+            # Process df_batch to make it easy to index per symbol
+            if not df_batch.empty:
+                for symbol in active_tickers:
+                    ticker = f"{symbol}.NS"
+                    if len(tickers_list) == 1:
+                        if isinstance(df_batch.columns, pd.MultiIndex):
+                            ticker_key = df_batch.columns.levels[0][0]
+                            df_ticker = df_batch[ticker_key]
+                        else:
+                            df_ticker = df_batch
+                    else:
+                        if isinstance(df_batch.columns, pd.MultiIndex) and ticker in df_batch.columns.levels[0]:
+                            df_ticker = df_batch[ticker]
+                        else:
+                            df_ticker = pd.DataFrame()
+                            
+                    if not df_ticker.empty:
+                        df_ticker = df_ticker.dropna()
+                        batch_data[symbol] = df_ticker
+        except Exception as e:
+            print(f"Failed to batch download active tickers: {str(e)}")
+            
+    # 3. Evaluate outcomes using the downloaded batch data
+    for scan in scans:
+        timestamp_str = scan.get("timestamp")
+        try:
+            scan_date = datetime.datetime.fromisoformat(timestamp_str)
+        except Exception:
+            continue
+            
         # Bullish
         for c in scan.get("bullish_candidates", []):
             symbol = c["symbol"]
-            ticker = f"{symbol}.NS"
             outcome = c.get("outcome", "ACTIVE")
             
-            if outcome == "ACTIVE":
-                start_date_str = scan_date.strftime("%Y-%m-%d")
-                end_date = datetime.datetime.now()
+            if outcome == "ACTIVE" and symbol in batch_data:
+                df = batch_data[symbol]
+                scan_date_only = scan_date.date()
+                df_filtered = df[df.index.date >= scan_date_only]
                 
-                try:
-                    df = yf.download(ticker, start=start_date_str, end=(end_date + datetime.timedelta(days=1)).strftime("%Y-%m-%d"), progress=False)
-                    if not df.empty:
-                        if isinstance(df.columns, pd.MultiIndex):
-                            df.columns = df.columns.get_level_values(0)
-                        df = df.dropna()
-                        # Evaluate on up to 10 trading days
-                        df_window = df.head(10)
-                        
-                        target = float(c["target_price"])
-                        sl = float(c["stop_loss"])
-                        
-                        outcome_found = False
-                        for idx, row in df_window.iterrows():
-                            high = float(row["High"])
-                            low = float(row["Low"])
-                            
-                            if high >= target:
-                                outcome = "ACHIEVED"
-                                outcome_found = True
-                                break
-                            elif low <= sl:
-                                outcome = "FAILED"
-                                outcome_found = True
-                                break
-                                
-                        if not outcome_found:
-                            if len(df) >= 10:
-                                outcome = "EXPIRED"
-                            else:
-                                outcome = "ACTIVE"
-                                
-                        if outcome != "ACTIVE":
-                            c["outcome"] = outcome
-                            updated_scans = True
-                except Exception as e:
-                    print(f"Failed to evaluate history for {symbol}: {str(e)}")
+                if not df_filtered.empty:
+                    df_window = df_filtered.head(10)
+                    target = float(c["target_price"])
+                    sl = float(c["stop_loss"])
                     
+                    outcome_found = False
+                    for idx, row in df_window.iterrows():
+                        high = float(row["High"])
+                        low = float(row["Low"])
+                        
+                        if high >= target:
+                            outcome = "ACHIEVED"
+                            outcome_found = True
+                            break
+                        elif low <= sl:
+                            outcome = "FAILED"
+                            outcome_found = True
+                            break
+                            
+                    if not outcome_found:
+                        if len(df_filtered) >= 10:
+                            outcome = "EXPIRED"
+                        else:
+                            outcome = "ACTIVE"
+                            
+                    if outcome != "ACTIVE":
+                        c["outcome"] = outcome
+                        updated_scans = True
+                        
             flattened_history.append({
                 "symbol": symbol,
                 "scan_date": scan_date.strftime("%Y-%m-%d %H:%M"),
@@ -725,54 +812,46 @@ async def get_history():
                 "setup_trigger": c["setup_trigger"],
                 "outcome": outcome
             })
-
+            
         # Bearish
         for c in scan.get("bearish_candidates", []):
             symbol = c["symbol"]
-            ticker = f"{symbol}.NS"
             outcome = c.get("outcome", "ACTIVE")
             
-            if outcome == "ACTIVE":
-                start_date_str = scan_date.strftime("%Y-%m-%d")
-                end_date = datetime.datetime.now()
+            if outcome == "ACTIVE" and symbol in batch_data:
+                df = batch_data[symbol]
+                scan_date_only = scan_date.date()
+                df_filtered = df[df.index.date >= scan_date_only]
                 
-                try:
-                    df = yf.download(ticker, start=start_date_str, end=(end_date + datetime.timedelta(days=1)).strftime("%Y-%m-%d"), progress=False)
-                    if not df.empty:
-                        if isinstance(df.columns, pd.MultiIndex):
-                            df.columns = df.columns.get_level_values(0)
-                        df = df.dropna()
-                        df_window = df.head(10)
-                        
-                        target = float(c["target_price"])
-                        sl = float(c["stop_loss"])
-                        
-                        outcome_found = False
-                        for idx, row in df_window.iterrows():
-                            high = float(row["High"])
-                            low = float(row["Low"])
-                            
-                            if low <= target:
-                                outcome = "ACHIEVED"
-                                outcome_found = True
-                                break
-                            elif high >= sl:
-                                outcome = "FAILED"
-                                outcome_found = True
-                                break
-                                
-                        if not outcome_found:
-                            if len(df) >= 10:
-                                outcome = "EXPIRED"
-                            else:
-                                outcome = "ACTIVE"
-                                
-                        if outcome != "ACTIVE":
-                            c["outcome"] = outcome
-                            updated_scans = True
-                except Exception as e:
-                    print(f"Failed to evaluate history for {symbol}: {str(e)}")
+                if not df_filtered.empty:
+                    df_window = df_filtered.head(10)
+                    target = float(c["target_price"])
+                    sl = float(c["stop_loss"])
                     
+                    outcome_found = False
+                    for idx, row in df_window.iterrows():
+                        high = float(row["High"])
+                        low = float(row["Low"])
+                        
+                        if low <= target:
+                            outcome = "ACHIEVED"
+                            outcome_found = True
+                            break
+                        elif high >= sl:
+                            outcome = "FAILED"
+                            outcome_found = True
+                            break
+                            
+                    if not outcome_found:
+                        if len(df_filtered) >= 10:
+                            outcome = "EXPIRED"
+                        else:
+                            outcome = "ACTIVE"
+                            
+                    if outcome != "ACTIVE":
+                        c["outcome"] = outcome
+                        updated_scans = True
+                        
             flattened_history.append({
                 "symbol": symbol,
                 "scan_date": scan_date.strftime("%Y-%m-%d %H:%M"),
@@ -784,10 +863,11 @@ async def get_history():
                 "setup_trigger": c["setup_trigger"],
                 "outcome": outcome
             })
-
+            
     if updated_scans:
         try:
-            with open(history_file, "w") as f:
+            writable_path = get_writable_path(history_file)
+            with open(writable_path, "w") as f:
                 json.dump(scans, f, indent=2)
         except Exception as e:
             print(f"Failed to save history cache: {str(e)}")

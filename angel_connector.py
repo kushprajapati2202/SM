@@ -24,6 +24,11 @@ class AngelConnector:
         self.symbol_map = {}
         self._load_symbol_map()
 
+    def _get_writable_path(self, filename: str) -> str:
+        if os.environ.get("VERCEL") or not os.access(".", os.W_OK):
+            return os.path.join("/tmp", filename)
+        return filename
+
     def _load_symbol_map(self):
         # Default static mapping for common watchlist constituents to avoid downloading the database initially
         self.symbol_map = {
@@ -38,16 +43,29 @@ class AngelConnector:
             "TATAMOTORS": "3456", "TATASTEEL": "3499", "TCS": "11536", "TECHM": "13538", "TITAN": "3506",
             "ULTRACEMCO": "11532", "WIPRO": "3787", "SHRIRAMFIN": "10447", "TRENT": "1964", "JIOFIN": "14299"
         }
+        
+        # 1. Try reading from writable path (like /tmp)
+        writable_path = self._get_writable_path(self.symbol_mapping_file)
+        if os.path.exists(writable_path):
+            try:
+                with open(writable_path, "r") as f:
+                    self.symbol_map.update(json.load(f))
+                    return
+            except Exception as e:
+                print(f"Failed to load symbol mapping file from writable path: {e}")
+                
+        # 2. Try reading from local directory fallback
         if os.path.exists(self.symbol_mapping_file):
             try:
                 with open(self.symbol_mapping_file, "r") as f:
                     self.symbol_map.update(json.load(f))
             except Exception as e:
-                print(f"Failed to load symbol mapping file: {e}")
+                print(f"Failed to load symbol mapping file from fallback: {e}")
 
     def save_symbol_map(self):
         try:
-            with open(self.symbol_mapping_file, "w") as f:
+            writable_path = self._get_writable_path(self.symbol_mapping_file)
+            with open(writable_path, "w") as f:
                 json.dump(self.symbol_map, f, indent=2)
         except Exception as e:
             print(f"Failed to save symbol mapping file: {e}")

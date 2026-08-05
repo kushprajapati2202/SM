@@ -58,7 +58,7 @@ class AISentinel:
         data = {
             "model": self.model,
             "messages": [
-                {"role": "system", "content": "You are a professional financial risk analyst specializing in the Indian stock market (NSE/BSE)."},
+                {"role": "system", "content": "You are a professional financial risk analyst specializing in the Indian stock market (NSE/BSE). You must output your response in JSON format."},
                 {"role": "user", "content": prompt}
             ],
             "temperature": 0.0,
