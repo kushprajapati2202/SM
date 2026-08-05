@@ -355,8 +355,8 @@ def calculate_technical_candidates(data: pd.DataFrame) -> tuple:
                 vol_pts += 3
             score += vol_pts
             
-            # Only trigger suggestions if Swing Strength Score is >= 60
-            if score >= 60:
+            # Only trigger suggestions if Swing Strength Score is >= 70
+            if score >= 70:
                 # Dynamic ATR & Support/Resistance exit/stop loss calculation
                 atr_val = safe_float(latest.get('atr'), close_price * 0.02)
                 if atr_val <= 0:
@@ -498,7 +498,7 @@ def calculate_technical_candidates(data: pd.DataFrame) -> tuple:
                 vol_pts += 7
             score += vol_pts
                 
-            if score >= 60:
+            if score >= 70:
                 # Dynamic ATR & Support/Resistance stop loss calculation
                 atr_val = safe_float(latest.get('atr'), close_price * 0.02)
                 if atr_val <= 0:
