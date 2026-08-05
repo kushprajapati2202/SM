@@ -310,7 +310,7 @@ async function loadHistory() {
 }
 
 // Active scanning logic
-document.getElementById("scan-btn").addEventListener("click", async () => {
+async function triggerScan() {
     const btn = document.getElementById("scan-btn");
     const loader = document.getElementById("loader");
     const board = document.getElementById("results-board");
@@ -393,7 +393,9 @@ document.getElementById("scan-btn").addEventListener("click", async () => {
         btn.disabled = false;
         btn.innerHTML = `<i class="fa-solid fa-satellite-dish"></i> Scan Watchlist`;
     }
-});
+}
+
+document.getElementById("scan-btn").addEventListener("click", triggerScan);
 
 // Run Backtester Logic
 document.getElementById("backtest-form").addEventListener("submit", async (e) => {
@@ -525,4 +527,5 @@ window.addEventListener("load", () => {
     setupTabNavigation();
     startRealTimeClock();
     checkApiStatus();
+    triggerScan(); // Run scanner automatically on page load
 });
