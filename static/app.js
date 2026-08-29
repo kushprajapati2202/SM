@@ -252,14 +252,35 @@ async function loadHistory() {
     if (!tbody) return;
     
     try {
-        const response = await fetch(`${API_BASE}/history`);
-        if (!response.ok) {
-            throw new Error(`API Error: ${response.statusText}`);
+        let historyData = [];
+        if (window.location.hostname.includes("github.io") || window.location.protocol === "file:") {
+            // Static hosting mode
+            const res = await fetch("suggestions_db.json");
+            if (res.ok) {
+                const rawSignals = await res.json();
+                historyData = rawSignals.map(s => ({
+                    symbol: s.symbol,
+                    scan_date: s.timestamp.substring(0, 16).replace("T", " "),
+                    type: "BUY",
+                    entry_price: s.entry_price,
+                    target_price: s.target_price,
+                    stop_loss: s.stop_loss,
+                    rsi: s.rsi || 50.0,
+                    setup_trigger: `${s.strategy} (Score: ${s.technical_score})`,
+                    outcome: s.outcome
+                }));
+            }
+        } else {
+            // Live backend API mode
+            const response = await fetch(`${API_BASE}/history`);
+            if (!response.ok) {
+                throw new Error(`API Error: ${response.statusText}`);
+            }
+            const data = await response.json();
+            historyData = data.history;
         }
         
-        const data = await response.json();
-        
-        if (data.history.length === 0) {
+        if (historyData.length === 0) {
             tbody.innerHTML = `
                 <tr>
                     <td colspan="9" class="no-results">No past scan records logged in history. Run a scan to build history.</td>
@@ -270,7 +291,7 @@ async function loadHistory() {
         
         tbody.innerHTML = ""; // Clear loader/previous data
         
-        data.history.forEach(item => {
+        historyData.forEach(item => {
             const tr = document.createElement("tr");
             
             // Format Outcome Status badge
@@ -281,6 +302,8 @@ async function loadHistory() {
                 outcomeBadge = `<span class="status-badge failed"><i class="fa-solid fa-circle-xmark"></i> FAILED</span>`;
             } else if (item.outcome === "EXPIRED") {
                 outcomeBadge = `<span class="status-badge expired"><i class="fa-solid fa-circle-minus"></i> EXPIRED</span>`;
+            } else if (item.outcome === "AMBIGUOUS") {
+                outcomeBadge = `<span class="status-badge expired" style="background: var(--accent-orange); color: #fff;"><i class="fa-solid fa-circle-question"></i> AMBIGUOUS</span>`;
             } else {
                 outcomeBadge = `<span class="status-badge active-trade"><i class="fa-solid fa-circle-play"></i> ACTIVE</span>`;
             }
@@ -324,13 +347,97 @@ async function loadPerformanceStats() {
     if (!strategyTbody || !aiTbody || !stockTbody) return;
     
     try {
-        const response = await fetch(`${API_BASE}/performance`);
-        if (!response.ok) {
-            throw new Error(`API Error: ${response.statusText}`);
+        let data = null;
+        if (window.location.hostname.includes("github.io") || window.location.protocol === "file:") {
+            // Client-side stats calculation for static pages
+            const res = await fetch("suggestions_db.json");
+            if (res.ok) {
+                const signals = await res.json();
+                const total = signals.length;
+                const achieved = signals.filter(s => s.outcome === "ACHIEVED").length;
+                const failed = signals.filter(s => s.outcome === "FAILED").length;
+                const expired = signals.filter(s => s.outcome === "EXPIRED").length;
+                const ambiguous = signals.filter(s => s.outcome === "AMBIGUOUS").length;
+                const open_count = signals.filter(s => s.outcome === "OPEN").length;
+                const closed = achieved + failed;
+                const win_rate = closed > 0 ? ((achieved / closed) * 100).toFixed(1) : "0.0";
+                
+                const by_strategy = {};
+                signals.forEach(s => {
+                    const strat = s.strategy;
+                    if (!by_strategy[strat]) by_strategy[strat] = { total: 0, win: 0, loss: 0 };
+                    by_strategy[strat].total++;
+                    if (s.outcome === "ACHIEVED") by_strategy[strat].win++;
+                    else if (s.outcome === "FAILED") by_strategy[strat].loss++;
+                });
+                const strategy_stats = {};
+                Object.entries(by_strategy).forEach(([strat, val]) => {
+                    const closed_s = val.win + val.loss;
+                    const wr = closed_s > 0 ? ((val.win / closed_s) * 100).toFixed(1) : "0.0";
+                    strategy_stats[strat] = `${wr}% (Win: ${val.win}/${val.total})`;
+                });
+
+                const ai_groups = {"90-100": {win: 0, closed: 0}, "80-89": {win: 0, closed: 0}, "70-79": {win: 0, closed: 0}, "60-69": {win: 0, closed: 0}, "Below 60": {win: 0, closed: 0}};
+                signals.forEach(s => {
+                    const ai_score = s.ai_score;
+                    const outcome = s.outcome;
+                    let group = "Below 60";
+                    if (ai_score >= 90) group = "90-100";
+                    else if (ai_score >= 80) group = "80-89";
+                    else if (ai_score >= 70) group = "70-79";
+                    else if (ai_score >= 60) group = "60-69";
+                    
+                    if (outcome === "ACHIEVED" || outcome === "FAILED") {
+                        ai_groups[group].closed++;
+                        if (outcome === "ACHIEVED") ai_groups[group].win++;
+                    }
+                });
+                const ai_score_stats = {};
+                Object.entries(ai_groups).forEach(([group, val]) => {
+                    const wr = val.closed > 0 ? ((val.win / val.closed) * 100).toFixed(1) : "0.0";
+                    ai_score_stats[group] = `${wr}% (${val.win}/${val.closed} closed)`;
+                });
+
+                const stocks = {};
+                signals.forEach(s => {
+                    const sym = s.symbol;
+                    if (!stocks[sym]) stocks[sym] = { win: 0, closed: 0 };
+                    if (s.outcome === "ACHIEVED" || s.outcome === "FAILED") {
+                        stocks[sym].closed++;
+                        if (s.outcome === "ACHIEVED") stocks[sym].win++;
+                    }
+                });
+                const stock_success = {};
+                Object.entries(stocks).forEach(([sym, val]) => {
+                    if (val.closed > 0) {
+                        const wr = ((val.win / val.closed) * 100).toFixed(1);
+                        stock_success[sym] = `${wr}% (${val.win}/${val.closed} trades)`;
+                    }
+                });
+
+                data = {
+                    win_rate,
+                    total_signals: total,
+                    targets_hit: achieved,
+                    stop_loss_hit: failed,
+                    expired,
+                    ambiguous,
+                    open: open_count,
+                    by_strategy: strategy_stats,
+                    by_ai_score: ai_score_stats,
+                    stock_success
+                };
+            }
+        } else {
+            const response = await fetch(`${API_BASE}/performance`);
+            if (!response.ok) {
+                throw new Error(`API Error: ${response.statusText}`);
+            }
+            data = await response.json();
         }
         
-        const data = await response.json();
-        
+        if (!data) return;
+
         // Populate overall stats widgets
         document.getElementById("perf-win-rate").innerText = `${data.win_rate}%`;
         document.getElementById("perf-total-signals").innerText = data.total_signals;
@@ -410,25 +517,41 @@ async function triggerScan() {
     
     const feed = document.getElementById("data-feed-select").value;
     try {
-        const response = await fetch(`${API_BASE}/scan?feed=${feed}`, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json"
+        let data = null;
+        if (window.location.hostname.includes("github.io") || window.location.protocol === "file:") {
+            // Static hosting mode: load the pre-calculated results from scan_history.json
+            const res = await fetch("scan_history.json");
+            if (res.ok) {
+                const historyList = await res.json();
+                if (historyList && historyList.length > 0) {
+                    data = historyList[historyList.length - 1]; // latest scan
+                }
             }
-        });
-        
-        if (!response.ok) {
-            throw new Error(`API Error: ${response.statusText}`);
+            if (!data) {
+                data = { bullish_candidates: [], bearish_candidates: [], total_scanned: 0 };
+            }
+            // Add a small artificial delay so the user sees the scanning transition
+            await new Promise(resolve => setTimeout(resolve, 1500));
+        } else {
+            // Live backend API mode
+            const response = await fetch(`${API_BASE}/scan?feed=${feed}`, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                }
+            });
+            if (!response.ok) {
+                throw new Error(`API Error: ${response.statusText}`);
+            }
+            data = await response.json();
         }
-        
-        const data = await response.json();
         
         // Save scan results in memory
         activeScanData.bullish_candidates = data.bullish_candidates || [];
         activeScanData.bearish_candidates = data.bearish_candidates || [];
         
         // Update Stats Cards
-        document.getElementById("stat-total").innerText = `${data.total_scanned} Stocks`;
+        document.getElementById("stat-total").innerText = `${data.total_scanned || 30} Stocks`;
         document.getElementById("stat-bullish").innerText = `${activeScanData.bullish_candidates.length} Found`;
         document.getElementById("stat-bearish").innerText = `${activeScanData.bearish_candidates.length} Found`;
         document.getElementById("stat-sentinel").innerText = "COMPLETED";
@@ -444,10 +567,15 @@ async function triggerScan() {
 
         // Refresh past suggestion tracker and API Status
         await loadHistory();
-        await checkApiStatus();
+        if (!(window.location.hostname.includes("github.io") || window.location.protocol === "file:")) {
+            await checkApiStatus();
+        } else {
+            document.getElementById("stat-feed-status").innerText = "STATIC CLOUD";
+            document.getElementById("stat-feed-status").style.color = "var(--accent-teal)";
+        }
         
     } catch (err) {
-        alert("Scanner failed. Please verify uvicorn backend is running!");
+        alert("Scanner failed. Please verify the scanner is configured correctly!");
         console.error(err);
         
         const errRow = `
