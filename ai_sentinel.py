@@ -8,11 +8,21 @@ class AISentinel:
     Uses free/low-cost cloud API endpoints (e.g., Groq) to analyze text data.
     """
 
-    def __init__(self, api_key: str = None, model: str = "llama3-8b-8192"):
-        # Load API key from environment if not passed explicitly
-        self.api_key = api_key or os.getenv("GROQ_API_KEY")
-        self.model = model
-        self.api_url = "https://api.groq.com/openai/v1/chat/completions"
+    def __init__(self, api_key: str = None, model: str = None):
+        # Prioritize NVIDIA_AI_API_KEY if present in environment
+        self.nvidia_key = os.getenv("NVIDIA_AI_API_KEY")
+        self.groq_key = api_key or os.getenv("GROQ_API_KEY")
+        
+        if self.nvidia_key:
+            self.api_key = self.nvidia_key
+            self.model = model or "meta/llama-3.2-11b-vision-instruct"
+            self.api_url = "https://integrate.api.nvidia.com/v1/chat/completions"
+            self.provider = "NVIDIA"
+        else:
+            self.api_key = self.groq_key
+            self.model = model or "llama3-8b-8192"
+            self.api_url = "https://api.groq.com/openai/v1/chat/completions"
+            self.provider = "GROQ"
 
     async def analyze_sentiment(self, symbol: str, news_headlines: list) -> Dict[str, Any]:
         """
@@ -24,7 +34,7 @@ class AISentinel:
             return {
                 "sentiment": "NEUTRAL",
                 "confidence": 0.5,
-                "reasoning": "Groq API key not configured. Defaulted to NEUTRAL for safety."
+                "reasoning": f"{self.provider} API key not configured. Defaulted to NEUTRAL for safety."
             }
 
         if not news_headlines:
@@ -55,6 +65,7 @@ class AISentinel:
             "Content-Type": "application/json"
         }
 
+        # Try with response_format first
         data = {
             "model": self.model,
             "messages": [
@@ -65,27 +76,44 @@ class AISentinel:
             "response_format": {"type": "json_object"}
         }
 
-        try:
+        async def make_request(request_data):
             async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.post(self.api_url, headers=headers, json=data)
+                response = await client.post(self.api_url, headers=headers, json=request_data)
                 response.raise_for_status()
                 result = response.json()
                 
-                # Parse the response message content
                 import json
                 content_str = result["choices"][0]["message"]["content"]
+                
+                # Simple extraction if model outputs surrounding markdown or text
+                content_str = content_str.strip()
+                if content_str.startswith("```json"):
+                    content_str = content_str[7:]
+                if content_str.endswith("```"):
+                    content_str = content_str[:-3]
+                content_str = content_str.strip()
+                
                 parsed_res = json.loads(content_str)
                 return {
                     "sentiment": parsed_res.get("sentiment", "NEUTRAL").upper(),
                     "confidence": float(parsed_res.get("confidence", 0.5)),
                     "reasoning": parsed_res.get("reasoning", "Parsed successfully.")
                 }
+
+        try:
+            return await make_request(data)
         except Exception as e:
-            return {
-                "sentiment": "NEUTRAL",
-                "confidence": 0.5,
-                "reasoning": f"AI Sentinel request failed: {str(e)}. Defaulted to NEUTRAL."
-            }
+            # Fallback retry without response_format if first request fails (e.g. 400 Bad Request or not supported)
+            try:
+                data_fallback = data.copy()
+                data_fallback.pop("response_format", None)
+                return await make_request(data_fallback)
+            except Exception as inner_e:
+                return {
+                    "sentiment": "NEUTRAL",
+                    "confidence": 0.5,
+                    "reasoning": f"AI Sentinel request failed ({self.provider}): {str(e)} -> Fallback: {str(inner_e)}. Defaulted to NEUTRAL."
+                }
             
     def validate_signal(self, signal_type: str, sentiment_data: Dict[str, Any]) -> bool:
         """
