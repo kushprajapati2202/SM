@@ -11,6 +11,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      pages: write
+      id-token: write
 
     steps:
     - name: Checkout Code
@@ -44,3 +46,9 @@ jobs:
         git add suggestions_db.json scan_history.json yf_cache.pkl || true
         git commit -m "chore: auto-update suggestions database [skip ci]" || true
         git push origin main || true
+
+    - name: Deploy to GitHub Pages
+      uses: peaceiris/actions-gh-pages@v3
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        publish_dir: ./
