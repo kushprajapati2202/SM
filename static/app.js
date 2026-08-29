@@ -30,11 +30,17 @@ function setupTabNavigation() {
                 }
             });
 
-            // Hide filter tools on history & backtest pages
-            if (targetId === "history-section" || targetId === "backtest-section") {
+            // Hide filter tools on history, backtest & performance pages
+            if (targetId === "history-section" || targetId === "backtest-section" || targetId === "performance-section") {
                 filtersContainer.style.display = "none";
             } else {
                 filtersContainer.style.display = "flex";
+            }
+
+            if (targetId === "history-section") {
+                loadHistory();
+            } else if (targetId === "performance-section") {
+                loadPerformanceStats();
             }
         });
     });
@@ -308,6 +314,78 @@ async function loadHistory() {
         `;
     }
 }
+
+// Fetch and populate Performance Stats Dashboard
+async function loadPerformanceStats() {
+    const strategyTbody = document.getElementById("perf-strategy-tbody");
+    const aiTbody = document.getElementById("perf-ai-tbody");
+    const stockTbody = document.getElementById("perf-stock-tbody");
+    
+    if (!strategyTbody || !aiTbody || !stockTbody) return;
+    
+    try {
+        const response = await fetch(`${API_BASE}/performance`);
+        if (!response.ok) {
+            throw new Error(`API Error: ${response.statusText}`);
+        }
+        
+        const data = await response.json();
+        
+        // Populate overall stats widgets
+        document.getElementById("perf-win-rate").innerText = `${data.win_rate}%`;
+        document.getElementById("perf-total-signals").innerText = data.total_signals;
+        document.getElementById("perf-hits-sl-expired").innerText = 
+            `Target Hit: ${data.targets_hit} | SL Hit: ${data.stop_loss_hit} | Expired: ${data.expired} | Ambiguous: ${data.ambiguous} | Open: ${data.open}`;
+            
+        // Strategy stats
+        if (Object.keys(data.by_strategy).length === 0) {
+            strategyTbody.innerHTML = `<tr><td colspan="2" class="no-results">No closed trades recorded.</td></tr>`;
+        } else {
+            strategyTbody.innerHTML = "";
+            Object.entries(data.by_strategy).forEach(([strat, val]) => {
+                const tr = document.createElement("tr");
+                tr.innerHTML = `
+                    <td><strong>${strat}</strong></td>
+                    <td><strong style="color: var(--accent-blue);">${val}</strong></td>
+                `;
+                strategyTbody.appendChild(tr);
+            });
+        }
+        
+        // AI Score stats
+        if (Object.keys(data.by_ai_score).length === 0) {
+            aiTbody.innerHTML = `<tr><td colspan="2" class="no-results">No closed trades recorded.</td></tr>`;
+        } else {
+            aiTbody.innerHTML = "";
+            Object.entries(data.by_ai_score).forEach(([range, val]) => {
+                const tr = document.createElement("tr");
+                tr.innerHTML = `
+                    <td><strong>AI Score ${range}</strong></td>
+                    <td><strong style="color: var(--accent-teal);">${val}</strong></td>
+                `;
+                aiTbody.appendChild(tr);
+            });
+        }
+        
+        // Stock success rate stats
+        if (Object.keys(data.stock_success).length === 0) {
+            stockTbody.innerHTML = `<tr><td colspan="2" class="no-results">No stock-specific success metrics compiled.</td></tr>`;
+        } else {
+            stockTbody.innerHTML = "";
+            Object.entries(data.stock_success).forEach(([sym, val]) => {
+                const tr = document.createElement("tr");
+                tr.innerHTML = `
+                    <td><span class="stock-badge">${sym}</span></td>
+                    <td><strong>${val}</strong></td>
+                `;
+                stockTbody.appendChild(tr);
+            });
+        }
+    } catch (err) {
+        console.error("Failed to load performance metrics:", err);
+    }
+}
+
 
 // Active scanning logic
 async function triggerScan() {

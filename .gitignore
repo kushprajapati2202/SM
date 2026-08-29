@@ -18,3 +18,6 @@ verify_angel.py
 # OS files
 .DS_Store
 Thumbs.db
+
+suggestions_db.json
+

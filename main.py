@@ -20,6 +20,14 @@ from pattern_detector import PatternDetector
 from ai_sentinel import AISentinel
 from angel_connector import AngelConnector
 
+# New modular engines
+from market_data_engine import MarketDataEngine
+from feature_engine import FeatureEngine
+from strategy_engine import StrategyEngine
+from risk_engine import RiskEngine
+from signal_database import SignalDatabase
+from outcome_engine import OutcomeEngine
+
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.concurrency import run_in_threadpool
 
@@ -43,6 +51,8 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 sentinel = AISentinel()
 angel = AngelConnector()
+market_data_eng = MarketDataEngine(angel)
+signal_db = SignalDatabase()
 
 # Predefined list of high-liquidity NSE stocks (Full Nifty 50 constituents)
 WATCHLIST = [
@@ -574,307 +584,322 @@ def read_root():
 
 @app.post("/scan")
 async def scan_market(force_refresh: bool = False, feed: str = "auto"):
-    # Append suffix for Yahoo Finance
-    tickers = [f"{t}.NS" for t in WATCHLIST]
-    tickers_str = " ".join(tickers)
+    # 1. Download Nifty 50 for relative strength calculation
+    nifty_df = None
+    try:
+        print("Downloading Nifty 50 index data for relative strength context...")
+        nifty_df = await run_in_threadpool(yf.download, "^NSEI", period="1y", interval="1d", progress=False)
+    except Exception as e:
+        print(f"Failed to fetch Nifty data: {e}")
 
-    data = None
-    if not force_refresh:
-        data = await run_in_threadpool(get_cached_market_data)
+    # 2. Download daily market data for watchlist
+    data = await market_data_eng.get_daily_data(WATCHLIST, force_refresh=force_refresh, feed=feed)
+    if data is None or data.empty:
+        raise HTTPException(status_code=500, detail="Failed to fetch market data.")
 
-    if data is None:
-        use_angel = False
-        if feed == "angel":
-            use_angel = True
-        elif feed == "auto" and angel.is_configured():
-            use_angel = True
+    bullish_candidates = []
+    
+    # 3. Analyze each constituent
+    for original_symbol in WATCHLIST:
+        ticker = f"{original_symbol}.NS"
+        try:
+            if isinstance(data.columns, pd.MultiIndex):
+                if ticker not in data.columns.levels[0]:
+                    continue
+                df = data[ticker].dropna()
+            else:
+                continue
+        except Exception:
+            continue
 
-        if use_angel:
-            try:
-                print("Fetching data from Angel One SmartAPI...")
-                # Download historical data from Angel One in parallel
-                async def fetch_ticker_data(symbol: str):
-                    df_ticker = await angel.get_historical_candles(symbol, interval="ONE_DAY", days_back=365)
-                    return symbol, df_ticker
-                
-                tasks = [fetch_ticker_data(s) for s in WATCHLIST]
-                results = await asyncio.gather(*tasks)
-                
-                dfs = []
-                keys = []
-                for sym, df_ticker in results:
-                    if df_ticker is not None and not df_ticker.empty:
-                        df_ticker = df_ticker.rename(columns={
-                            'open': 'Open',
-                            'high': 'High',
-                            'low': 'Low',
-                            'close': 'Close',
-                            'volume': 'Volume'
-                        })
-                        df_ticker['Date'] = pd.to_datetime(df_ticker['timestamp'])
-                        df_ticker = df_ticker.set_index('Date')
-                        df_ticker = df_ticker[['Open', 'High', 'Low', 'Close', 'Volume']]
-                        dfs.append(df_ticker)
-                        keys.append(f"{sym}.NS")
-                
-                if dfs:
-                    data = pd.concat(dfs, axis=1, keys=keys)
-                    await run_in_threadpool(save_market_data_to_cache, data)
-                else:
-                    raise Exception("No data returned from Angel One for watchlist.")
-            except Exception as e:
-                print(f"Angel One data fetch failed: {e}")
-                if feed == "angel":
-                    raise HTTPException(
-                        status_code=502,
-                        detail=f"Angel One SmartAPI failed: {str(e)}"
-                    )
-                print("Falling back to Yahoo Finance...")
-                data = None
+        if len(df) < 30:
+            continue
 
-        if data is None:
-            try:
-                # Download historical data (1 year of daily candles to support 200 EMA calculation)
-                print("Fetching data from Yahoo Finance...")
-                data = await run_in_threadpool(yf.download, tickers_str, period="1y", interval="1d", group_by="ticker", progress=False)
-                await run_in_threadpool(save_market_data_to_cache, data)
-            except Exception as e:
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Failed to fetch market data: {str(e)}"
-                )
+        # Format and calculate features
+        df = df.reset_index()
+        date_col = 'Date' if 'Date' in df.columns else df.columns[0]
+        df['timestamp'] = df[date_col].astype(str)
+        df.columns = [col.lower() for col in df.columns]
 
-    # Calculate indicators in threadpool to prevent event loop blocking
-    bullish_candidates, bearish_candidates = await run_in_threadpool(calculate_technical_candidates, data)
+        df_features = FeatureEngine.calculate_features(df, nifty_df)
+        if df_features.empty or len(df_features) < 2:
+            continue
 
-    # Perform async news/AI sentiment analysis sequentially
-    for c in bullish_candidates:
-        sym = c["symbol"]
-        live_headlines = await run_in_threadpool(get_live_news_headlines, sym)
-        c["headlines"] = live_headlines
-        sentiment_report = await sentinel.analyze_sentiment(sym, live_headlines)
+        latest = df_features.iloc[-1].to_dict()
+        prev = df_features.iloc[-2].to_dict()
+
+        # Evaluate strategy triggers
+        strategy_triggered = StrategyEngine.evaluate_strategies(latest, prev)
+        if not strategy_triggered:
+            continue
+
+        # Calculate Technical Score (Max 100)
+        close_price = float(latest['close'])
+        ema_50 = float(latest.get('ema_50', close_price))
+        ema_200 = float(latest.get('ema_200', close_price))
+        volume = float(latest.get('volume', 1.0))
+        volume_avg_20 = float(latest.get('volume_avg_20', 1.0))
+        rsi = float(latest.get('rsi', 50.0))
+        macd_hist = float(latest.get('macd_hist', 0.0))
+        prev_macd_hist = float(prev.get('macd_hist', 0.0))
+        adx = float(latest.get('adx', 25.0))
+        bb_width = float(latest.get('bb_width', 0.0))
+
+        tech_score = 0
+        # A. Trend Alignment (Max 25 pts)
+        if close_price > ema_50 and ema_50 > ema_200:
+            tech_score += 25
+        elif close_price > ema_200:
+            tech_score += 15
+        elif abs(close_price - ema_50) / ema_50 < 0.02:
+            tech_score += 20
+            
+        # B. Volume Expansion (Max 20 pts)
+        rel_vol = volume / volume_avg_20 if volume_avg_20 > 0 else 1.0
+        if rel_vol > 2.0:
+            tech_score += 20
+        elif rel_vol > 1.2:
+            tech_score += 12
+        elif rel_vol > 0.8:
+            tech_score += 6
+            
+        # C. Momentum Confirmation (Max 20 pts)
+        momentum_pts = 0
+        if 45 <= rsi <= 68:
+            momentum_pts += 10
+        elif rsi < 38:
+            momentum_pts += 10
+        if macd_hist > prev_macd_hist:
+            momentum_pts += 10
+        elif macd_hist > 0:
+            momentum_pts += 5
+        tech_score += momentum_pts
+            
+        # D. Pattern/Strategy Type (Max 20 pts)
+        if "Breakout" in strategy_triggered or "Momentum" in strategy_triggered:
+            tech_score += 20
+        else:
+            tech_score += 15
+            
+        # E. Volatility Breakout (Max 15 pts)
+        vol_pts = 0
+        if adx > 22:
+            vol_pts += 8
+        if bb_width > 0 and bb_width < 0.06:
+            vol_pts += 7
+        elif bb_width > 0.12:
+            vol_pts += 3
+        tech_score += vol_pts
+
+        # Filter out setups with technical score < 60
+        if tech_score < 60:
+            continue
+
+        # Get local support/resistance for risk engine
+        sr_levels = QuantitativeEngine.detect_support_resistance(df)
+        supports = sr_levels.get("supports", [])
+        resistances = sr_levels.get("resistances", [])
+        atr_val = float(latest.get('atr', close_price * 0.02))
+
+        # Risk Calculation
+        trade_setup = RiskEngine.calculate_trade_setup(close_price, atr_val, supports, resistances)
+
+        # AI sentiment ranking using NVIDIA Sentinel
+        live_headlines = await run_in_threadpool(get_live_news_headlines, original_symbol)
+        sentiment_report = await sentinel.analyze_sentiment(original_symbol, live_headlines)
         validated = sentinel.validate_signal("BUY", sentiment_report)
-        c["ai_sentiment"] = sentiment_report.get("sentiment", "NEUTRAL")
-        c["ai_reason"] = sentiment_report.get("reasoning", "")
-        c["status"] = "APPROVED" if validated else "BLOCKED_BY_RISK"
 
-    for c in bearish_candidates:
-        sym = c["symbol"]
-        live_headlines = await run_in_threadpool(get_live_news_headlines, sym)
-        c["headlines"] = live_headlines
-        sentiment_report = await sentinel.analyze_sentiment(sym, live_headlines)
-        validated = sentinel.validate_signal("SELL", sentiment_report)
-        c["ai_sentiment"] = sentiment_report.get("sentiment", "NEUTRAL")
-        c["ai_reason"] = sentiment_report.get("reasoning", "")
-        c["status"] = "APPROVED" if validated else "BLOCKED_BY_RISK"
+        ai_sentiment = sentiment_report.get("sentiment", "NEUTRAL")
+        ai_reason = sentiment_report.get("reasoning", "")
+        
+        # Calculate AI Score
+        confidence = float(sentiment_report.get("confidence", 0.5))
+        if ai_sentiment == "POSITIVE":
+            ai_score = int(50 + 50 * confidence)
+        elif ai_sentiment == "NEGATIVE":
+            ai_score = int(50 - 50 * confidence)
+        else:
+            ai_score = 50
 
-    # Sort candidates by accuracy score descending
-    bullish_candidates = sorted(bullish_candidates, key=lambda x: x['accuracy_score'], reverse=True)
-    bearish_candidates = sorted(bearish_candidates, key=lambda x: x['accuracy_score'], reverse=True)
+        final_score = int(0.7 * tech_score + 0.3 * ai_score)
+
+        candidate = {
+            "symbol": original_symbol,
+            "strategy": strategy_triggered,
+            "entry_price": trade_setup["entry_price"],
+            "stop_loss": trade_setup["stop_loss"],
+            "target_price": trade_setup["target_price"],
+            "rr_ratio": trade_setup["rr_ratio"],
+            "position_size": trade_setup["position_size"],
+            "total_investment": trade_setup["total_investment"],
+            "technical_score": tech_score,
+            "ai_score": ai_score,
+            "final_score": final_score,
+            "ai_sentiment": ai_sentiment,
+            "ai_reason": ai_reason,
+            "status": "APPROVED" if validated else "BLOCKED_BY_RISK"
+        }
+
+        # Log recommendation to Signal Database
+        sig_id = signal_db.add_signal(candidate)
+        if sig_id:
+            candidate["signal_id"] = sig_id
+            bullish_candidates.append(candidate)
+
+    # 4. Trigger Outcome Engine to evaluate and update open signals
+    await OutcomeEngine.evaluate_open_signals(signal_db)
+
+    # Maintain compatibility with scan history JSON
+    compat_bullish = []
+    for c in bullish_candidates:
+        compat_bullish.append({
+            "symbol": c["symbol"],
+            "close_price": c["entry_price"],
+            "target_price": c["target_price"],
+            "stop_loss": c["stop_loss"],
+            "potential_return": f"+{round(((c['target_price']-c['entry_price'])/c['entry_price'])*100, 1)}%",
+            "rsi": rsi,
+            "setup_trigger": f"{c['strategy']} (Score: {c['technical_score']})",
+            "accuracy_score": c["final_score"],
+            "ai_sentiment": c["ai_sentiment"],
+            "ai_reason": c["ai_reason"],
+            "status": c["status"]
+        })
 
     result = {
         "total_scanned": len(WATCHLIST),
-        "bullish_count": len(bullish_candidates),
-        "bearish_count": len(bearish_candidates),
-        "bullish_candidates": bullish_candidates,
-        "bearish_candidates": bearish_candidates
+        "bullish_count": len(compat_bullish),
+        "bearish_count": 0,
+        "bullish_candidates": compat_bullish,
+        "bearish_candidates": []
     }
-    
     save_scan_to_history(result)
-    
+
     return result
 
 @app.get("/history")
 async def get_history():
-    history_file = "scan_history.json"
-    scans = load_json_file(history_file, [])
-    if not scans:
-        return {"history": []}
-        
-    updated_scans = False
+    all_signals = signal_db.get_all_signals()
     flattened_history = []
     
-    # 1. Identify all active candidates and find the earliest scan date
-    active_tickers = set()
-    earliest_date = None
-    
-    for scan in scans:
-        timestamp_str = scan.get("timestamp")
-        if not timestamp_str:
-            continue
-        try:
-            scan_date = datetime.datetime.fromisoformat(timestamp_str)
-        except Exception:
-            continue
-            
-        for c in scan.get("bullish_candidates", []) + scan.get("bearish_candidates", []):
-            if c.get("outcome", "ACTIVE") == "ACTIVE":
-                active_tickers.add(c["symbol"])
-                if earliest_date is None or scan_date < earliest_date:
-                    earliest_date = scan_date
-                    
-    # 2. Batch download data from Yahoo Finance for all active tickers
-    batch_data = {}
-    if active_tickers:
-        tickers_list = [f"{sym}.NS" for sym in active_tickers]
-        start_date_str = earliest_date.strftime("%Y-%m-%d")
-        end_date_str = (datetime.datetime.now() + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+    for s in all_signals:
+        flattened_history.append({
+            "symbol": s["symbol"],
+            "scan_date": s["timestamp"][:16].replace("T", " "),
+            "type": "BUY",
+            "entry_price": s["entry_price"],
+            "target_price": s["target_price"],
+            "stop_loss": s["stop_loss"],
+            "rsi": 50.0, # fallback
+            "setup_trigger": f"{s['strategy']} (Final Score: {s['final_score']})",
+            "outcome": s["outcome"]
+        })
         
-        try:
-            print(f"Batch downloading {len(tickers_list)} active tickers from {start_date_str} to {end_date_str}...")
-            # Use run_in_threadpool to keep it non-blocking
-            df_batch = await run_in_threadpool(
-                yf.download,
-                tickers_list,
-                start=start_date_str,
-                end=end_date_str,
-                group_by="ticker",
-                progress=False
-            )
-            
-            # Process df_batch to make it easy to index per symbol
-            if not df_batch.empty:
-                for symbol in active_tickers:
-                    ticker = f"{symbol}.NS"
-                    if len(tickers_list) == 1:
-                        if isinstance(df_batch.columns, pd.MultiIndex):
-                            ticker_key = df_batch.columns.levels[0][0]
-                            df_ticker = df_batch[ticker_key]
-                        else:
-                            df_ticker = df_batch
-                    else:
-                        if isinstance(df_batch.columns, pd.MultiIndex) and ticker in df_batch.columns.levels[0]:
-                            df_ticker = df_batch[ticker]
-                        else:
-                            df_ticker = pd.DataFrame()
-                            
-                    if not df_ticker.empty:
-                        df_ticker = df_ticker.dropna()
-                        batch_data[symbol] = df_ticker
-        except Exception as e:
-            print(f"Failed to batch download active tickers: {str(e)}")
-            
-    # 3. Evaluate outcomes using the downloaded batch data
-    for scan in scans:
-        timestamp_str = scan.get("timestamp")
-        try:
-            scan_date = datetime.datetime.fromisoformat(timestamp_str)
-        except Exception:
-            continue
-            
-        # Bullish
-        for c in scan.get("bullish_candidates", []):
-            symbol = c["symbol"]
-            outcome = c.get("outcome", "ACTIVE")
-            
-            if outcome == "ACTIVE" and symbol in batch_data:
-                df = batch_data[symbol]
-                scan_date_only = scan_date.date()
-                df_filtered = df[df.index.date >= scan_date_only]
-                
-                if not df_filtered.empty:
-                    df_window = df_filtered.head(10)
-                    target = float(c["target_price"])
-                    sl = float(c["stop_loss"])
-                    
-                    outcome_found = False
-                    for idx, row in df_window.iterrows():
-                        high = float(row["High"])
-                        low = float(row["Low"])
-                        
-                        if high >= target:
-                            outcome = "ACHIEVED"
-                            outcome_found = True
-                            break
-                        elif low <= sl:
-                            outcome = "FAILED"
-                            outcome_found = True
-                            break
-                            
-                    if not outcome_found:
-                        if len(df_filtered) >= 10:
-                            outcome = "EXPIRED"
-                        else:
-                            outcome = "ACTIVE"
-                            
-                    if outcome != "ACTIVE":
-                        c["outcome"] = outcome
-                        updated_scans = True
-                        
-            flattened_history.append({
-                "symbol": symbol,
-                "scan_date": scan_date.strftime("%Y-%m-%d %H:%M"),
-                "type": "BUY",
-                "entry_price": c["close_price"],
-                "target_price": c["target_price"],
-                "stop_loss": c["stop_loss"],
-                "rsi": c["rsi"],
-                "setup_trigger": c["setup_trigger"],
-                "outcome": outcome
-            })
-            
-        # Bearish
-        for c in scan.get("bearish_candidates", []):
-            symbol = c["symbol"]
-            outcome = c.get("outcome", "ACTIVE")
-            
-            if outcome == "ACTIVE" and symbol in batch_data:
-                df = batch_data[symbol]
-                scan_date_only = scan_date.date()
-                df_filtered = df[df.index.date >= scan_date_only]
-                
-                if not df_filtered.empty:
-                    df_window = df_filtered.head(10)
-                    target = float(c["target_price"])
-                    sl = float(c["stop_loss"])
-                    
-                    outcome_found = False
-                    for idx, row in df_window.iterrows():
-                        high = float(row["High"])
-                        low = float(row["Low"])
-                        
-                        if low <= target:
-                            outcome = "ACHIEVED"
-                            outcome_found = True
-                            break
-                        elif high >= sl:
-                            outcome = "FAILED"
-                            outcome_found = True
-                            break
-                            
-                    if not outcome_found:
-                        if len(df_filtered) >= 10:
-                            outcome = "EXPIRED"
-                        else:
-                            outcome = "ACTIVE"
-                            
-                    if outcome != "ACTIVE":
-                        c["outcome"] = outcome
-                        updated_scans = True
-                        
-            flattened_history.append({
-                "symbol": symbol,
-                "scan_date": scan_date.strftime("%Y-%m-%d %H:%M"),
-                "type": "SHORT",
-                "entry_price": c["close_price"],
-                "target_price": c["target_price"],
-                "stop_loss": c["stop_loss"],
-                "rsi": c["rsi"],
-                "setup_trigger": c["setup_trigger"],
-                "outcome": outcome
-            })
-            
-    if updated_scans:
-        try:
-            writable_path = get_writable_path(history_file)
-            with open(writable_path, "w") as f:
-                json.dump(scans, f, indent=2)
-        except Exception as e:
-            print(f"Failed to save history cache: {str(e)}")
-            
     # Sort history (latest scan date first)
     flattened_history = sorted(flattened_history, key=lambda x: x['scan_date'], reverse=True)
     return {"history": flattened_history}
+
+@app.get("/performance")
+async def get_performance():
+    signals = signal_db.get_all_signals()
+    total = len(signals)
+    if total == 0:
+        return {
+            "total_signals": 0,
+            "targets_hit": 0,
+            "stop_loss_hit": 0,
+            "expired": 0,
+            "ambiguous": 0,
+            "open": 0,
+            "win_rate": 0.0,
+            "by_strategy": {},
+            "by_ai_score": {},
+            "stock_success": {}
+        }
+
+    achieved = sum(1 for s in signals if s["outcome"] == "ACHIEVED")
+    failed = sum(1 for s in signals if s["outcome"] == "FAILED")
+    expired = sum(1 for s in signals if s["outcome"] == "EXPIRED")
+    ambiguous = sum(1 for s in signals if s["outcome"] == "AMBIGUOUS")
+    open_count = sum(1 for s in signals if s["outcome"] == "OPEN")
+
+    closed = achieved + failed
+    win_rate = round((achieved / closed * 100), 1) if closed > 0 else 0.0
+
+    # Group by strategy
+    strategies = {}
+    for s in signals:
+        strat = s["strategy"]
+        if strat not in strategies:
+            strategies[strat] = {"total": 0, "win": 0, "loss": 0}
+        strategies[strat]["total"] += 1
+        if s["outcome"] == "ACHIEVED":
+            strategies[strat]["win"] += 1
+        elif s["outcome"] == "FAILED":
+            strategies[strat]["loss"] += 1
+
+    strategy_stats = {}
+    for strat, data in strategies.items():
+        closed_s = data["win"] + data["loss"]
+        wr = round((data["win"] / closed_s * 100), 1) if closed_s > 0 else 0.0
+        strategy_stats[strat] = f"{wr}% (Win: {data['win']}/{data['total']})"
+
+    # Group by AI score range
+    ai_groups = {"90-100": {"win": 0, "closed": 0}, "80-89": {"win": 0, "closed": 0}, "70-79": {"win": 0, "closed": 0}, "60-69": {"win": 0, "closed": 0}, "Below 60": {"win": 0, "closed": 0}}
+    for s in signals:
+        ai_score = s["ai_score"]
+        outcome = s["outcome"]
+        
+        if ai_score >= 90:
+            group = "90-100"
+        elif ai_score >= 80:
+            group = "80-89"
+        elif ai_score >= 70:
+            group = "70-79"
+        elif ai_score >= 60:
+            group = "60-69"
+        else:
+            group = "Below 60"
+            
+        if outcome in ["ACHIEVED", "FAILED"]:
+            ai_groups[group]["closed"] += 1
+            if outcome == "ACHIEVED":
+                ai_groups[group]["win"] += 1
+
+    ai_score_stats = {}
+    for group, data in ai_groups.items():
+        wr = round((data["win"] / data["closed"] * 100), 1) if data["closed"] > 0 else 0.0
+        ai_score_stats[group] = f"{wr}% ({data['win']}/{data['closed']} closed)"
+
+    # Stock-specific success rates
+    stocks = {}
+    for s in signals:
+        sym = s["symbol"]
+        if sym not in stocks:
+            stocks[sym] = {"win": 0, "closed": 0}
+        if s["outcome"] in ["ACHIEVED", "FAILED"]:
+            stocks[sym]["closed"] += 1
+            if s["outcome"] == "ACHIEVED":
+                stocks[sym]["win"] += 1
+
+    stock_success = {}
+    for sym, data in stocks.items():
+        if data["closed"] > 0:
+            wr = round((data["win"] / data["closed"] * 100), 1)
+            stock_success[sym] = f"{wr}% ({data['win']}/{data['closed']} trades)"
+
+    return {
+        "total_signals": total,
+        "targets_hit": achieved,
+        "stop_loss_hit": failed,
+        "expired": expired,
+        "ambiguous": ambiguous,
+        "open": open_count,
+        "win_rate": win_rate,
+        "by_strategy": strategy_stats,
+        "by_ai_score": ai_score_stats,
+        "stock_success": stock_success
+    }
 
 class BacktestRequest(BaseModel):
     start_date: str

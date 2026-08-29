@@ -65,6 +65,9 @@
             <button class="segment-btn" data-target="history-section">
                 <i class="fa-solid fa-clock-rotate-left"></i> History Log
             </button>
+            <button class="segment-btn" data-target="performance-section">
+                <i class="fa-solid fa-chart-line"></i> Performance Stats
+            </button>
             <button class="segment-btn" data-target="backtest-section">
                 <i class="fa-solid fa-flask"></i> Backtest Lab
             </button>
@@ -277,6 +280,77 @@
                                 <tr>
                                     <td colspan="8" class="no-results">Fill parameters above and run the backtester simulation.</td>
                                 </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Section 5: Performance Stats -->
+            <div id="performance-section" class="view-section">
+                <div class="stats-grid" id="perf-overall-stats" style="margin-bottom: 24px;">
+                    <div class="stat-card">
+                        <span>Win Rate</span>
+                        <strong id="perf-win-rate" style="color: var(--accent-green);">-</strong>
+                    </div>
+                    <div class="stat-card">
+                        <span>Total Recommendations</span>
+                        <strong id="perf-total-signals">-</strong>
+                    </div>
+                    <div class="stat-card">
+                        <span>Targets Hit / SL Hit / Expired</span>
+                        <strong id="perf-hits-sl-expired" style="font-size: 16px; margin-top: 14px;">-</strong>
+                    </div>
+                </div>
+
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 24px; margin-bottom: 24px;">
+                    <div class="table-card">
+                        <h3><i class="fa-solid fa-list-check"></i> Performance by Strategy</h3>
+                        <div class="table-container">
+                            <table style="width: 100%;">
+                                <thead>
+                                    <tr>
+                                        <th>Strategy</th>
+                                        <th>Win Rate & Stats</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="perf-strategy-tbody">
+                                    <tr><td colspan="2" class="no-results">No performance data compiled yet.</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    
+                    <div class="table-card">
+                        <h3><i class="fa-solid fa-brain"></i> Performance by AI Score Range</h3>
+                        <div class="table-container">
+                            <table style="width: 100%;">
+                                <thead>
+                                    <tr>
+                                        <th>AI Score Range</th>
+                                        <th>Win Rate & Stats</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="perf-ai-tbody">
+                                    <tr><td colspan="2" class="no-results">No performance data compiled yet.</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="table-card">
+                    <h3><i class="fa-solid fa-trophy"></i> Historical Success Rate by Stock Symbol</h3>
+                    <div class="table-container">
+                        <table style="width: 100%;">
+                            <thead>
+                                <tr>
+                                    <th>Stock Symbol</th>
+                                    <th>Win Rate & Trade Count</th>
+                                </tr>
+                            </thead>
+                            <tbody id="perf-stock-tbody">
+                                <tr><td colspan="2" class="no-results">No performance data compiled yet.</td></tr>
                             </tbody>
                         </table>
                     </div>
