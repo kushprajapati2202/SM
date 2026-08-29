@@ -510,7 +510,12 @@ async function triggerScan() {
         if (activeRes.ok) {
             const historyList = await activeRes.json();
             if (historyList && historyList.length > 0) {
-                data = historyList[historyList.length - 1]; // latest scan
+                // Pick the latest scan record that has trade candidates (or fallback to latest)
+                const non_empty = historyList.slice().reverse().find(s => 
+                    (s.bullish_candidates && s.bullish_candidates.length > 0) || 
+                    (s.bearish_candidates && s.bearish_candidates.length > 0)
+                );
+                data = non_empty || historyList[historyList.length - 1];
             }
         }
         if (!data) {
